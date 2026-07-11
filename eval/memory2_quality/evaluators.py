@@ -18,7 +18,19 @@ def normalize_fact(text: str) -> str:
 def fact_is_entailed(expected: str, actual: str) -> bool:
     expected_norm = normalize_fact(expected)
     actual_norm = normalize_fact(actual)
-    return bool(expected_norm) and expected_norm in actual_norm
+    if not expected_norm:
+        return False
+    if expected_norm in actual_norm:
+        return True
+    if len(expected_norm) < 4:
+        return False
+    expected_bigrams = {
+        expected_norm[index : index + 2] for index in range(len(expected_norm) - 1)
+    }
+    actual_bigrams = {
+        actual_norm[index : index + 2] for index in range(len(actual_norm) - 1)
+    }
+    return len(expected_bigrams & actual_bigrams) / len(expected_bigrams) >= 0.65
 
 
 def evaluate_recall_ranking(

@@ -107,6 +107,8 @@ async def test_write_runner_replays_and_snapshots(tmp_path: Path) -> None:
     try:
         result = await run_write_case(rt, _case())
         assert consolidation.calls == 1
+        assert rt.core.session_manager.session._channel == "benchmark"
+        assert rt.core.session_manager.session._chat_id == "write_001"
         assert len(result.state_diff.created) == 1
         assert result.label_to_item_id == {"defense": result.state_diff.created[0].id}
     finally:
@@ -125,3 +127,38 @@ async def test_recall_runner_resolves_expected_label(tmp_path: Path) -> None:
     finally:
         store.close()
 
+
+@pytest.mark.asyncio
+async def test_recall_runner_fails_when_required_label_was_not_written(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore2(tmp_path / "memory2.db", vec_dim=3)
+    engine = _Engine(store)
+    rt = SimpleNamespace(core=SimpleNamespace(memory_runtime=SimpleNamespace(engine=engine)))
+    try:
+        results = await run_recall_probes(rt, _case(), {})
+        assert results[0].metrics["passed"] is False
+        assert results[0].metrics["missing_required_labels"] == ["defense"]
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_recall_runner_checks_forbidden_facts_and_required_types(
+    tmp_path: Path,
+) -> None:
+    case = _case().model_copy(deep=True)
+    case.recall_probes[0].required_memory_labels = []
+    case.recall_probes[0].required_types = ["preference"]
+    case.recall_probes[0].forbidden_facts = ["完成了答辩"]
+    store = MemoryStore2(tmp_path / "memory2.db", vec_dim=3)
+    engine = _Engine(store)
+    rt = SimpleNamespace(core=SimpleNamespace(memory_runtime=SimpleNamespace(engine=engine)))
+    try:
+        results = await run_recall_probes(rt, case, {})
+        metrics = results[0].metrics
+        assert metrics["passed"] is False
+        assert metrics["forbidden_fact_hits"] == ["完成了答辩"]
+        assert metrics["missing_required_types"] == ["preference"]
+    finally:
+        store.close()

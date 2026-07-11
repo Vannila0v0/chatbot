@@ -82,21 +82,37 @@ class LangSmithSink:
                 )
             dataset_id = str(dataset.id)
             for case in cases:
-                await asyncio.to_thread(
-                    self.client.create_example,
-                    inputs={
+                example_id = uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"langsmith:{dataset_id}:{case.get('case_id')}",
+                )
+                fields = {
+                    "inputs": {
                         "case_id": case.get("case_id"),
                         "sessions": case.get("sessions", []),
                         "initial_memories": case.get("initial_memories", []),
                         "recall_probes": case.get("recall_probes", []),
                     },
-                    outputs={"expected_write": case.get("expected_write", {})},
-                    metadata={
+                    "outputs": {"expected_write": case.get("expected_write", {})},
+                    "metadata": {
                         "category": case.get("category"),
                         "source": case.get("source"),
                     },
-                    dataset_id=dataset_id,
-                )
+                }
+                try:
+                    await asyncio.to_thread(
+                        self.client.create_example,
+                        dataset_id=dataset_id,
+                        example_id=example_id,
+                        **fields,
+                    )
+                except Exception:
+                    await asyncio.to_thread(
+                        self.client.update_example,
+                        example_id,
+                        dataset_id=dataset_id,
+                        **fields,
+                    )
         except Exception as exc:
             self.errors.append(str(exc))
 

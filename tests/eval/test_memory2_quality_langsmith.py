@@ -58,3 +58,30 @@ def test_sink_creates_dataset_example_and_case_trace() -> None:
     assert client.examples[0]["dataset_id"] == "dataset-1"
     assert result["run_id"]
     assert [entry[0] for entry in client.runs] == ["create", "update", "feedback"]
+
+
+def test_dataset_sync_updates_existing_deterministic_example() -> None:
+    class Client:
+        def __init__(self):
+            self.ids = set()
+            self.updated = []
+
+        def read_dataset(self, *, dataset_name):
+            return type("Dataset", (), {"id": "dataset-1"})()
+
+        def create_example(self, **kwargs):
+            example_id = kwargs["example_id"]
+            if example_id in self.ids:
+                raise RuntimeError("already exists")
+            self.ids.add(example_id)
+
+        def update_example(self, example_id, **kwargs):
+            self.updated.append(example_id)
+
+    client = Client()
+    sink = LangSmithSink(client=client, project_name="experiment")
+    case = {"case_id": "stable-case", "expected_write": {"required": []}}
+    asyncio.run(sink.sync_dataset("memory2-quality-v1", [case]))
+    asyncio.run(sink.sync_dataset("memory2-quality-v1", [case]))
+    assert len(client.ids) == 1
+    assert client.updated == list(client.ids)

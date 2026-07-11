@@ -49,7 +49,7 @@ async def run_evaluation(args: argparse.Namespace) -> Path:
         else LangSmithSink.disabled()
     )
     await sink.sync_dataset(
-        args.dataset.stem,
+        f"memory2-quality-{args.dataset.stem}",
         [case.model_dump(mode="json") for case in cases],
     )
     semaphore = asyncio.Semaphore(max(1, args.workers))

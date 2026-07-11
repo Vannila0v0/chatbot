@@ -1,12 +1,20 @@
 from eval.memory2_quality.evaluators import (
     aggregate_scores,
     evaluate_recall_ranking,
+    fact_is_entailed,
     normalize_fact,
 )
 
 
 def test_normalize_fact_removes_spacing_and_punctuation() -> None:
     assert normalize_fact(" 用户，喜欢 安静的餐厅。 ") == "用户喜欢安静的餐厅"
+
+
+def test_fact_entailment_tolerates_inserted_time_phrase() -> None:
+    assert fact_is_entailed(
+        "用户完成了硕士论文答辩",
+        "[2026-07-01 10:00] 用户于昨天完成了硕士论文答辩。",
+    )
 
 
 def test_recall_metrics_count_forbidden_and_rank() -> None:
@@ -46,4 +54,3 @@ def test_aggregate_scores_groups_categories_and_errors() -> None:
         "errors": 1,
     }
     assert summary["by_category"]["conflict"]["pass_rate"] == 0.5
-

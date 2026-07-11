@@ -18,6 +18,8 @@ async def run_write_case(runtime: Any, case: MemoryEvalCase) -> WriteRunResult:
         for eval_session in case.sessions:
             session_manager._cache.pop(session_key, None)
             session = session_manager.get_or_create(session_key)
+            session._channel = "benchmark"
+            session._chat_id = case.case_id
             for message in eval_session.messages:
                 session.add_message(message.role, message.content)
                 timestamp = message.timestamp or eval_session.timestamp

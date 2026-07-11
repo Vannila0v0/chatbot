@@ -66,6 +66,24 @@ class BenchmarkRuntime:
     workspace: Path
 
 
+class BenchmarkConsolidationAdapter:
+    """Keep the benchmark ingest API while using current markdown maintenance."""
+
+    def __init__(self, maintenance: object) -> None:
+        self._maintenance = maintenance
+
+    async def consolidate(self, session: object, archive_all: bool = False) -> object:
+        from core.memory.markdown import ConsolidateRequest
+
+        return await self._maintenance.consolidate(  # type: ignore[attr-defined]
+            ConsolidateRequest(
+                session=session,
+                archive_all=archive_all,
+                force=archive_all,
+            )
+        )
+
+
 async def create_runtime(config_path: Path, workspace: Path) -> BenchmarkRuntime:
     """Wire the full production stack into a temp workspace.
 
@@ -74,11 +92,9 @@ async def create_runtime(config_path: Path, workspace: Path) -> BenchmarkRuntime
         workspace: Temp directory; will be initialised on first call.
     """
     from agent.config import load_config
-    from agent.looping.consolidation import ConsolidationService
     from bootstrap.init_workspace import init_workspace
     from bootstrap.tools import build_core_runtime
     from core.net.http import SharedHttpResources
-    from memory2.profile_extractor import ProfileFactExtractor
 
     config = load_config(config_path)
 
@@ -95,26 +111,11 @@ async def create_runtime(config_path: Path, workspace: Path) -> BenchmarkRuntime
     http = SharedHttpResources()
     core = build_core_runtime(config, workspace, http)
 
-    # 4. Build a ConsolidationService that shares the same memory port.
-    #    This is used during ingest; the AgentLoop has its own internal
-    #    instance but we need explicit control over consolidation timing.
-    light = core.light_provider or core.provider
-    light_model = config.light_model or config.model
-    profile_extractor = ProfileFactExtractor(
-        llm_client=light,
-        model=light_model,
-    )
+    # 4. Reuse the production markdown maintenance implementation while
+    #    preserving the benchmark's explicit consolidate(session, ...) API.
     keep_count = max(1, config.memory_window // 2)
-    consolidation = ConsolidationService(
-        memory_port=core.memory_runtime.port,
-        profile_maint=getattr(core.memory_runtime, "profile_maint", None)
-        or core.memory_runtime.port,
-        provider=core.provider,
-        model=config.model,
-        keep_count=keep_count,
-        profile_extractor=profile_extractor,
-        recent_context_provider=light,
-        recent_context_model=light_model,
+    consolidation = BenchmarkConsolidationAdapter(
+        core.memory_runtime.markdown.maintenance,
     )
 
     logger.info(
