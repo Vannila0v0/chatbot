@@ -1,0 +1,145 @@
+# ============================================================
+# Secrets and machine-local configuration
+# ============================================================
+/.github/
+/config.toml
+/config.json
+/config.yaml
+/config.json.bak
+/config.backup.*.json
+/mcp_servers
+/mcp_servers.json
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+plugins/**/config.local.toml
+plugins/**/plugin_config.json
+plugins/**/plugin.disabled
+
+# Keep safe configuration templates.
+!config.example.toml
+!**/config.example.toml
+!**/*.example.toml
+!**/*.example.json
+!**/*.example.yaml
+
+# ============================================================
+# Personal content, internal notes, documents, and media
+# ============================================================
+/docs/
+/_handbook/
+/assets/
+/piagent/
+/static/dashboard/DESIGN_SPEC.md
+/面试-*.md
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
+
+# Public README files remain eligible for upload.
+!README.md
+!**/README.md
+!/COMMUNICATION.md
+
+# ============================================================
+# Real conversations, memories, runtime state, and local AI data
+# ============================================================
+/.akashic-workspace/
+/workspace/
+/memory/
+/data/
+/logs/
+/rss/
+/private_runtime/
+/.gitmodules
+/bad_cases/
+/.agents/
+/.claude/
+/.codex
+/.squad/
+/locks/
+skills/**/state.json
+plugins/**/.data/
+/plugins/steam/
+**/.kv.json
+
+# Databases and process/runtime artifacts
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+*.pid
+*.jobid
+*.out
+*.err
+
+# ============================================================
+# Python, Node.js, editor, and test caches
+# ============================================================
+/.venv/
+**/__pycache__/
+*.py[cod]
+*.pyo
+/.pytest_cache/
+/.pytest_artifacts/
+/.test-tmp/
+/.publish-audit/
+/.npm-cache/
+/node_modules/
+/.idea/
+/.vscode/
+
+# Generated frontend/plugin assets
+/frontend/dashboard/static/
+plugins/*/dashboard_panel*.js
+
+# ============================================================
+# Benchmark and evaluation outputs
+# ============================================================
+/_bench/*
+!/_bench/*.py
+!/_bench/*.ps1
+!/_bench/*sample*.json
+!/_bench/*sample*.md
+!/_bench/*benchmark*.json
+
+/eval/**/results/
+/eval/**/workspaces/
+/eval/local_testsets/
+/evals/
+/tests/regression/
+qa_error_log_*.txt
+lme_error_log_*.txt
+
+# ============================================================
+# Docker local state; keep Dockerfiles, compose files, scripts,
+# examples, and synthetic scenarios.
+# ============================================================
+/docker/.env
+/docker/**/.env
+/docker/**/runtime/
+/docker/debug/profiles/
+
+# ============================================================
+# Archives and local install/build artifacts
+# ============================================================
+*.zip
+*.tar
+*.tar.gz
+*.7z
+/frontend/dist/
+/dist/
+/build/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini

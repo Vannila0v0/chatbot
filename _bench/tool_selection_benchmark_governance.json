@@ -1,0 +1,176 @@
+{
+  "name": "tool_selection_governance",
+  "description": "Tool governance benchmark covering builtin tools, dynamically mounted MCP tools, risk separation, and no-tool requests.",
+  "cases": [
+    {
+      "id": "memory_read_001",
+      "category": "memory_read",
+      "prompt": "我之前说过想投什么方向的岗位吗？请查一下长期记忆再回答。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["recall_memory"],
+      "tool_search_expected_tools": ["recall_memory"],
+      "acceptable_tools": ["recall_memory"],
+      "forbidden_tools": ["forget_memory", "memorize", "write_file", "edit_file"],
+      "risk_policy": "read-only",
+      "must_unlock_deferred": false
+    },
+    {
+      "id": "memory_correct_001",
+      "category": "memory_correction",
+      "prompt": "如果记忆里有“我想投算法岗”这条，请把它纠正掉。我现在只投 LLM 应用 / Agent / RAG。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["recall_memory", "forget_memory", "memorize"],
+      "tool_search_expected_tools": ["recall_memory", "forget_memory", "memorize"],
+      "acceptable_tools": ["recall_memory", "forget_memory", "memorize"],
+      "forbidden_tools": ["write_file", "edit_file"],
+      "must_unlock_deferred": false
+    },
+    {
+      "id": "message_search_001",
+      "category": "message_lookup",
+      "prompt": "帮我找一下我们之前讨论 tool_search 误选率的聊天记录。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["search_messages"],
+      "tool_search_expected_tools": ["search_messages"],
+      "acceptable_tools": ["search_messages", "fetch_messages"],
+      "forbidden_tools": ["forget_memory", "memorize", "write_file"],
+      "risk_policy": "read-only",
+      "must_unlock_deferred": false
+    },
+    {
+      "id": "file_read_001",
+      "category": "filesystem_read",
+      "prompt": "请读取项目里的 README.md，告诉我这个项目的启动方式。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["read_file"],
+      "tool_search_expected_tools": ["read_file"],
+      "acceptable_tools": ["read_file", "list_dir"],
+      "forbidden_tools": ["write_file", "edit_file", "shell"],
+      "risk_policy": "read-only",
+      "must_unlock_deferred": false
+    },
+    {
+      "id": "file_write_001",
+      "category": "filesystem_write",
+      "prompt": "请把工具治理 benchmark 的结论写进一个新的 markdown 文件里。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["write_file"],
+      "tool_search_expected_tools": ["write_file"],
+      "acceptable_tools": ["write_file"],
+      "forbidden_tools": ["read_file", "forget_memory"],
+      "must_unlock_deferred": false
+    },
+    {
+      "id": "mcp_list_001",
+      "category": "mcp_manage_read",
+      "prompt": "帮我看看现在接入了哪些 MCP 服务。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["mcp_list"],
+      "tool_search_expected_tools": ["tool_search", "mcp_list"],
+      "acceptable_tools": ["tool_search", "mcp_list"],
+      "forbidden_tools": ["mcp_add", "mcp_remove"],
+      "risk_policy": "read-only",
+      "must_unlock_deferred": true
+    },
+    {
+      "id": "job_add_001",
+      "category": "mcp_job_write",
+      "prompt": "帮我记录一个岗位：公司 DeepAgent，岗位 LLM 应用开发工程师，来源 Boss，优先级 high。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["mcp_job__job_add"],
+      "tool_search_expected_tools": ["tool_search", "mcp_job__job_add"],
+      "acceptable_tools": ["tool_search", "mcp_job__job_add"],
+      "forbidden_tools": ["mcp_job__job_search", "mcp_job__job_update_status", "mcp_feed__feed_manage"],
+      "must_unlock_deferred": true
+    },
+    {
+      "id": "job_search_001",
+      "category": "mcp_job_read",
+      "prompt": "查一下我记录过哪些 Agent 相关岗位。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["mcp_job__job_search"],
+      "tool_search_expected_tools": ["tool_search", "mcp_job__job_search"],
+      "acceptable_tools": ["tool_search", "mcp_job__job_search", "mcp_job__job_list"],
+      "forbidden_tools": ["mcp_job__job_add", "mcp_job__job_update_status", "mcp_feed__feed_query"],
+      "must_unlock_deferred": true
+    },
+    {
+      "id": "job_status_001",
+      "category": "mcp_job_write",
+      "prompt": "把我刚才那个岗位状态改成 applied。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["mcp_job__job_update_status"],
+      "tool_search_expected_tools": ["tool_search", "mcp_job__job_update_status"],
+      "acceptable_tools": ["tool_search", "mcp_job__job_update_status", "mcp_job__job_search"],
+      "forbidden_tools": ["mcp_job__job_add", "mcp_feed__feed_manage"],
+      "must_unlock_deferred": true
+    },
+    {
+      "id": "feed_query_001",
+      "category": "mcp_feed_read",
+      "prompt": "查一下我订阅源里最近有没有 Agent 或 RAG 相关内容。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["mcp_feed__feed_query"],
+      "tool_search_expected_tools": ["tool_search", "mcp_feed__feed_query"],
+      "acceptable_tools": ["tool_search", "mcp_feed__feed_query"],
+      "forbidden_tools": ["mcp_feed__feed_manage", "mcp_job__job_search"],
+      "must_unlock_deferred": true
+    },
+    {
+      "id": "feed_manage_001",
+      "category": "mcp_feed_write",
+      "prompt": "给我新增一个 RSS 订阅源，名字叫 LLM News，链接是 https://example.com/rss.xml。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["mcp_feed__feed_manage"],
+      "tool_search_expected_tools": ["tool_search", "mcp_feed__feed_manage"],
+      "acceptable_tools": ["tool_search", "mcp_feed__feed_manage"],
+      "forbidden_tools": ["mcp_feed__feed_query", "mcp_job__job_add"],
+      "must_unlock_deferred": true
+    },
+    {
+      "id": "schedule_list_001",
+      "category": "schedule_read",
+      "prompt": "看看我现在有哪些定时任务。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["list_schedules"],
+      "tool_search_expected_tools": ["tool_search", "list_schedules"],
+      "acceptable_tools": ["tool_search", "list_schedules"],
+      "forbidden_tools": ["schedule", "cancel_schedule"],
+      "risk_policy": "read-only",
+      "must_unlock_deferred": true
+    },
+    {
+      "id": "schedule_create_001",
+      "category": "schedule_write",
+      "prompt": "明天早上 9 点提醒我复习 Agent 工具体系。",
+      "requires_tool": true,
+      "baseline_expected_tools": ["schedule"],
+      "tool_search_expected_tools": ["tool_search", "schedule"],
+      "acceptable_tools": ["tool_search", "schedule"],
+      "forbidden_tools": ["cancel_schedule", "list_schedules"],
+      "must_unlock_deferred": true
+    },
+    {
+      "id": "no_tool_001",
+      "category": "no_tool",
+      "prompt": "请用一段话解释 Function Calling 是什么，不要查资料。",
+      "requires_tool": false,
+      "baseline_expected_tools": [],
+      "tool_search_expected_tools": [],
+      "acceptable_tools": [],
+      "forbidden_tools": ["web_search", "recall_memory", "tool_search"],
+      "must_unlock_deferred": false
+    },
+    {
+      "id": "no_tool_002",
+      "category": "no_tool",
+      "prompt": "帮我把“工具按需解锁降低提示词开销”这句话改得更适合简历，不需要查看项目。",
+      "requires_tool": false,
+      "baseline_expected_tools": [],
+      "tool_search_expected_tools": [],
+      "acceptable_tools": [],
+      "forbidden_tools": ["read_file", "search_messages", "tool_search"],
+      "must_unlock_deferred": false
+    }
+  ]
+}
