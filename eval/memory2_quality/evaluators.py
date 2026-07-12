@@ -95,6 +95,20 @@ def evaluate_write_result(
         )
     passed = not result.error and not missing_labels and not forbidden_hits and not action_failures and count_ok
     components = [not missing_labels, not forbidden_hits, not action_failures, count_ok]
+    required_fact_recall = (
+        (len(required_labels) - len(missing_labels)) / len(required_labels)
+        if required_labels
+        else 1.0
+    )
+    expected_action_count = len(case.expected_write.expected_actions)
+    action_accuracy = (
+        (expected_action_count - len(action_failures)) / expected_action_count
+        if expected_action_count
+        else 1.0
+    )
+    forbidden_fact_count = sum(
+        len(item.facts) for item in case.expected_write.forbidden
+    )
     return {
         "passed": passed,
         "score": sum(components) / len(components),
@@ -102,6 +116,13 @@ def evaluate_write_result(
         "forbidden_fact_hits": forbidden_hits,
         "action_failures": action_failures,
         "new_count_ok": count_ok,
+        "required_fact_recall": required_fact_recall,
+        "action_accuracy": action_accuracy,
+        "forbidden_fact_rate": (
+            len(set(forbidden_hits)) / forbidden_fact_count
+            if forbidden_fact_count
+            else 0.0
+        ),
     }
 
 

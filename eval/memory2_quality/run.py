@@ -8,7 +8,7 @@ from typing import Any
 
 from .dataset import load_cases
 from .evaluators import evaluate_write_result
-from .langsmith_sync import LangSmithSink
+from .langsmith_sync import LangSmithSink, run_experiment, traced_stage
 from .recall_runner import run_recall_probes
 from .report import write_report
 from .runtime import safe_case_workspace
@@ -48,26 +48,47 @@ async def run_evaluation(args: argparse.Namespace) -> Path:
         if args.langsmith
         else LangSmithSink.disabled()
     )
+    dataset_name = f"memory2-quality-{args.dataset.stem}"
     await sink.sync_dataset(
-        f"memory2-quality-{args.dataset.stem}",
+        dataset_name,
         [case.model_dump(mode="json") for case in cases],
     )
     semaphore = asyncio.Semaphore(max(1, args.workers))
 
-    async def process(case):
+    async def process(case, *, tracing: bool = False):
         async with semaphore:
             case_dir = safe_case_workspace(run_root, case.case_id)
             cached = case_dir / "result.json"
             if args.resume and cached.exists():
                 import json
                 return json.loads(cached.read_text(encoding="utf-8"))
-            result = await _run_case(args, case, case_dir)
+            result = await _run_case(args, case, case_dir, tracing=tracing)
             import json
             cached.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-            await sink.record_case(case.model_dump(mode="json"), result)
+            if not tracing:
+                await sink.record_case(case.model_dump(mode="json"), result)
             return result
 
-    results = await asyncio.gather(*(process(case) for case in cases))
+    if sink.enabled:
+        case_by_id = {case.case_id: case for case in cases}
+        results = []
+
+        async def target(inputs: dict[str, Any]) -> dict[str, Any]:
+            case = case_by_id[str(inputs["case_id"])]
+            result = await process(case, tracing=True)
+            results.append(result)
+            return result
+
+        examples = await sink.selected_examples(dataset_name, set(case_by_id))
+        await run_experiment(
+            target=target,
+            data=examples,
+            experiment_prefix=f"{args.experiment_prefix}-{timestamp}",
+            max_concurrency=args.workers,
+        )
+        results.sort(key=lambda item: str(item.get("case_id")))
+    else:
+        results = await asyncio.gather(*(process(case) for case in cases))
     manifest = {
         "dataset": str(args.dataset),
         "mode": args.mode,
@@ -81,7 +102,13 @@ async def run_evaluation(args: argparse.Namespace) -> Path:
     return run_root
 
 
-async def _run_case(args: argparse.Namespace, case: Any, workspace: Path) -> dict[str, Any]:
+async def _run_case(
+    args: argparse.Namespace,
+    case: Any,
+    workspace: Path,
+    *,
+    tracing: bool = False,
+) -> dict[str, Any]:
     from eval.longmemeval.runtime import close_runtime, create_runtime
 
     runtime = await create_runtime(args.config, workspace)
@@ -92,22 +119,34 @@ async def _run_case(args: argparse.Namespace, case: Any, workspace: Path) -> dic
         fixtures = list(case.initial_memories)
         if args.mode == "recall":
             fixtures.extend(case.recall_fixture_memories)
-        local_map = await seed_memories(store, embedder, fixtures)
+        with traced_stage(tracing, "seed_memories", {"count": len(fixtures)}) as stage:
+            local_map = await seed_memories(store, embedder, fixtures)
+            stage.set_outputs({"seeded_count": len(local_map)})
         write_result = None
         label_map: dict[str, str] = {}
         write_metrics: dict[str, Any] = {}
         if args.mode in {"write", "all"}:
-            write_result = await run_write_case(runtime, case)
+            with traced_stage(tracing, "write_memory", {"case_id": case.case_id}) as stage:
+                write_result = await run_write_case(runtime, case)
+                stage.set_outputs(write_result.model_dump(mode="json"))
             label_map = write_result.label_to_item_id
-            write_metrics = evaluate_write_result(case, write_result, local_map)
+            with traced_stage(tracing, "evaluate_state_diff") as stage:
+                write_metrics = evaluate_write_result(case, write_result, local_map)
+                stage.set_outputs(write_metrics)
         recall_results = []
         if args.mode in {"recall", "all"}:
-            recall_results = await run_recall_probes(runtime, case, label_map, local_map)
+            with traced_stage(
+                tracing, "recall_memories", {"probe_count": len(case.recall_probes)}
+            ) as stage:
+                recall_results = await run_recall_probes(runtime, case, label_map, local_map)
+                stage.set_outputs(
+                    {"probes": [item.model_dump(mode="json") for item in recall_results]}
+                )
         recall_passed = all(bool(item.metrics.get("passed")) and not item.error for item in recall_results)
         passed = bool(write_metrics.get("passed", True)) and recall_passed
         scores = [float(write_metrics.get("score", 1.0))]
         scores.extend(1.0 if item.metrics.get("passed") else 0.0 for item in recall_results)
-        return {
+        result = {
             "case_id": case.case_id,
             "category": case.category,
             "passed": passed,
@@ -117,6 +156,12 @@ async def _run_case(args: argparse.Namespace, case: Any, workspace: Path) -> dic
             "write_metrics": write_metrics,
             "recall": [item.model_dump(mode="json") for item in recall_results],
         }
+        with traced_stage(tracing, "evaluate_case") as stage:
+            stage.set_outputs({
+                "passed": result["passed"],
+                "score": result["score"],
+            })
+        return result
     except Exception as exc:
         return {"case_id": case.case_id, "category": case.category, "passed": False, "score": 0.0, "error": str(exc)}
     finally:

@@ -3,9 +3,92 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+
+def _trace(**kwargs: Any):
+    from langsmith import trace
+
+    return trace(**kwargs)
+
+
+async def _aevaluate(*args: Any, **kwargs: Any):
+    from langsmith import aevaluate
+
+    return await aevaluate(*args, **kwargs)
+
+
+class _Stage:
+    def __init__(self, run: Any | None = None) -> None:
+        self.run = run
+        self.outputs: dict[str, Any] | None = None
+
+    def set_outputs(self, outputs: dict[str, Any]) -> None:
+        self.outputs = outputs
+
+
+@contextmanager
+def traced_stage(enabled: bool, name: str, inputs: dict[str, Any] | None = None):
+    """Create a child Run when executing inside a LangSmith experiment."""
+    if not enabled:
+        yield _Stage()
+        return
+    with _trace(name=name, run_type="chain", inputs=inputs or {}) as run:
+        stage = _Stage(run)
+        yield stage
+        if stage.outputs is not None:
+            run.end(outputs=stage.outputs)
+
+
+def feedback_scores_from_result(result: dict[str, Any]) -> dict[str, float]:
+    write = result.get("write_metrics") or {}
+    recalls = [item.get("metrics") or {} for item in result.get("recall") or []]
+
+    def average(key: str, default: float) -> float:
+        values = [float(item[key]) for item in recalls if key in item]
+        return sum(values) / len(values) if values else default
+
+    scores = {
+        "memory2_quality_score": float(result.get("score") or 0.0),
+        "case_pass": float(bool(result.get("passed"))),
+    }
+    optional = {
+        "write_required_fact_recall": write.get("required_fact_recall"),
+        "write_action_accuracy": write.get("action_accuracy"),
+        "write_forbidden_fact_rate": write.get("forbidden_fact_rate"),
+    }
+    scores.update({key: float(value) for key, value in optional.items() if value is not None})
+    scores.update(
+        {
+            "recall_at_k": average("recall_at_k", 1.0),
+            "mrr": average("mrr", 1.0),
+            "forbidden_recall_rate": average("forbidden_recall_rate", 0.0),
+        }
+    )
+    return scores
+
+
+def _metric_evaluator(run: Any, example: Any):
+    _ = example
+    outputs = getattr(run, "outputs", None) or {}
+    return [{"key": key, "score": score} for key, score in feedback_scores_from_result(outputs).items()]
+
+
+async def run_experiment(
+    *, target: Any, data: Any, experiment_prefix: str, max_concurrency: int
+) -> Any:
+    return await _aevaluate(
+        target,
+        data=data,
+        evaluators=[_metric_evaluator],
+        experiment_prefix=experiment_prefix,
+        max_concurrency=max(1, max_concurrency),
+        blocking=True,
+        metadata={"benchmark": "memory2-quality"},
+    )
 
 
 @dataclass
@@ -115,6 +198,20 @@ class LangSmithSink:
                     )
         except Exception as exc:
             self.errors.append(str(exc))
+
+    async def selected_examples(
+        self, dataset_name: str, case_ids: set[str]
+    ) -> list[Any]:
+        if not self.enabled or self.client is None:
+            return []
+        examples = await asyncio.to_thread(
+            lambda: list(self.client.list_examples(dataset_name=dataset_name))
+        )
+        return [
+            example
+            for example in examples
+            if str((example.inputs or {}).get("case_id")) in case_ids
+        ]
 
     async def finalize(self, summary: dict[str, Any]) -> None:
         _ = summary

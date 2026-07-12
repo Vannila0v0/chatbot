@@ -1,6 +1,11 @@
 import asyncio
 
-from eval.memory2_quality.langsmith_sync import LangSmithSink
+from eval.memory2_quality.langsmith_sync import (
+    LangSmithSink,
+    feedback_scores_from_result,
+    run_experiment,
+    traced_stage,
+)
 
 
 def test_disabled_sink_is_noop() -> None:
@@ -85,3 +90,84 @@ def test_dataset_sync_updates_existing_deterministic_example() -> None:
     asyncio.run(sink.sync_dataset("memory2-quality-v1", [case]))
     assert len(client.ids) == 1
     assert client.updated == list(client.ids)
+
+
+def test_feedback_scores_expose_individual_quality_metrics() -> None:
+    result = {
+        "passed": False,
+        "score": 0.6,
+        "write_metrics": {
+            "required_fact_recall": 0.5,
+            "action_accuracy": 1.0,
+            "forbidden_fact_rate": 0.25,
+        },
+        "recall": [
+            {"metrics": {"recall_at_k": 1.0, "mrr": 0.5, "forbidden_recall_rate": 0.0}},
+            {"metrics": {"recall_at_k": 0.0, "mrr": 0.0, "forbidden_recall_rate": 0.5}},
+        ],
+    }
+
+    assert feedback_scores_from_result(result) == {
+        "memory2_quality_score": 0.6,
+        "case_pass": 0.0,
+        "write_required_fact_recall": 0.5,
+        "write_action_accuracy": 1.0,
+        "write_forbidden_fact_rate": 0.25,
+        "recall_at_k": 0.5,
+        "mrr": 0.25,
+        "forbidden_recall_rate": 0.25,
+    }
+
+
+def test_traced_stage_records_child_outputs(monkeypatch) -> None:
+    recorded = []
+
+    class Run:
+        def end(self, *, outputs):
+            recorded.append(outputs)
+
+    class Context:
+        def __enter__(self):
+            return Run()
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        "eval.memory2_quality.langsmith_sync._trace",
+        lambda **kwargs: Context(),
+    )
+    with traced_stage(True, "seed_memories", {"count": 2}) as stage:
+        stage.set_outputs({"seeded": 2})
+    assert recorded == [{"seeded": 2}]
+
+
+def test_run_experiment_uses_standard_aevaluate_and_metric_evaluator(monkeypatch) -> None:
+    captured = {}
+
+    async def fake_aevaluate(target, **kwargs):
+        captured.update(kwargs)
+        output = await target({"case_id": "c1"})
+        evaluator_result = kwargs["evaluators"][0](
+            type("Run", (), {"outputs": output})(), type("Example", (), {})()
+        )
+        captured["output"] = output
+        captured["feedback"] = evaluator_result
+        return type("Results", (), {"wait": lambda self: None})()
+
+    monkeypatch.setattr("eval.memory2_quality.langsmith_sync._aevaluate", fake_aevaluate)
+
+    async def target(inputs):
+        return {"case_id": inputs["case_id"], "passed": True, "score": 1.0, "recall": []}
+
+    asyncio.run(
+        run_experiment(
+            target=target,
+            data=[{"case_id": "c1"}],
+            experiment_prefix="memory2-test",
+            max_concurrency=2,
+        )
+    )
+    assert captured["experiment_prefix"] == "memory2-test"
+    assert captured["max_concurrency"] == 2
+    assert captured["feedback"][0] == {"key": "memory2_quality_score", "score": 1.0}
