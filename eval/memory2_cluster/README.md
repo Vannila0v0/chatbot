@@ -81,3 +81,21 @@ python -m eval.memory2_cluster.draft_clusters `
 ```
 
 生成器不会创建 query 或 oracle。每条记忆必须通过真实 `source_ref` 校验，memory 与 cluster 必须双向一致；失败任务会记录错误，同时保留已经成功的结果，重新运行时支持断点续跑。审核表会优先列出低置信度和 assistant-only 记忆，人工确认后才能进入下一阶段。
+
+人工确认后，先机械计算 reinforcement 和最后使用时间并冻结记忆，再从冻结版本派生 query：
+
+```powershell
+python -m eval.memory2_cluster.freeze_drafts `
+  --source .akashic-workspace/eval_candidates/natural_candidate_timelines.jsonl `
+  --drafts .akashic-workspace/eval_candidates/memory_cluster_drafts.jsonl `
+  --output .akashic-workspace/eval_candidates/frozen_memory_timelines.jsonl
+
+python -m eval.memory2_cluster.derive_queries `
+  --config config.toml `
+  --timelines .akashic-workspace/eval_candidates/frozen_memory_timelines.jsonl `
+  --output .akashic-workspace/eval_candidates/derived_query_candidates.jsonl `
+  --review-output .akashic-workspace/eval_candidates/derived_query_review.md `
+  --workers 2
+```
+
+默认每条时间线派生 4 个 query，并按完整时间线顺序切成 60% dev、20% validation、20% test。同一时间线不会跨集合。每个 query 必须标注时间线里的全部 cluster 和 memory；簇级 oracle 衡量相关事件覆盖，memory oracle 用于区分同一簇中的当前状态和过期状态。方向冲突、自比较或引用不存在对象的 preferred pair 会被机械移除。派生后仍需审核 query 和 oracle，冻结测试集不能用于调整参数。

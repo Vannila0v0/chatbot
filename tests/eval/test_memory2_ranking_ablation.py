@@ -1,4 +1,9 @@
-from eval.memory2_cluster.ablation import compare_ranking_results, summarize_ablation
+from eval.memory2_cluster.ablation import (
+    compare_ranking_results,
+    evaluate_ablation_ranking,
+    summarize_ablation,
+)
+from eval.memory2_cluster.models import ClusterProbe
 
 
 def test_compare_ranking_results_reports_treatment_delta_and_regression() -> None:
@@ -79,3 +84,26 @@ def test_summarize_ablation_reports_paired_average_and_wins() -> None:
     assert summary["natural"]["treatment"]["weighted_cluster_coverage"] == 0.875
     assert summary["natural"]["cohorts"]["benefit"]["n"] == 1
     assert summary["natural"]["cohorts"]["guardrail"]["n"] == 1
+
+
+def test_evaluate_ablation_ranking_distinguishes_memories_in_same_cluster() -> None:
+    probe = ClusterProbe(
+        case_id="case_1",
+        timeline_id="timeline_1",
+        query="现在是什么状态？",
+        query_time="2026-01-10T00:00:00+08:00",
+        cluster_oracle={"status": "core"},
+        memory_oracle={"current_status": "core", "old_status": "forbidden"},
+        preferred_memory_pairs=[("current_status", "old_status")],
+    )
+    hits = [
+        {"local_id": "old_status", "cluster_id": "status"},
+        {"local_id": "current_status", "cluster_id": "status"},
+    ]
+
+    metrics = evaluate_ablation_ranking(probe, hits)
+
+    assert metrics["core_cluster_recall"] == 1.0
+    assert metrics["memory_mrr"] == 0.5
+    assert metrics["memory_pairwise_accuracy"] == 0.0
+    assert metrics["memory_forbidden_rate"] == 1.0

@@ -12,6 +12,13 @@ def cluster_feedback_scores(result: dict[str, Any]) -> dict[str, float]:
         "weighted_cluster_coverage",
         "cluster_mrr",
         "irrelevant_cluster_rate",
+        "memory_weighted_coverage",
+        "memory_core_recall",
+        "memory_mrr",
+        "memory_ndcg_at_k",
+        "memory_pairwise_accuracy",
+        "memory_forbidden_rate",
+        "memory_irrelevant_rate",
         "forbidden_cluster_rate",
         "duplicate_cluster_rate",
         "relevant_cluster_diversity",
@@ -59,6 +66,13 @@ def ablation_feedback_scores(result: dict[str, Any]) -> dict[str, float]:
         "pairwise_accuracy",
         "forbidden_cluster_rate",
         "irrelevant_cluster_rate",
+        "memory_weighted_coverage",
+        "memory_core_recall",
+        "memory_mrr",
+        "memory_ndcg_at_k",
+        "memory_pairwise_accuracy",
+        "memory_forbidden_rate",
+        "memory_irrelevant_rate",
     )
     scores: dict[str, float] = {}
     for key in keys:
@@ -66,6 +80,12 @@ def ablation_feedback_scores(result: dict[str, Any]) -> dict[str, float]:
         scores[f"treatment_{key}"] = float(treatment.get(key, 0.0))
     scores["coverage_delta"] = float(comparison.get("coverage_delta", 0.0))
     scores["mrr_delta"] = float(comparison.get("mrr_delta", 0.0))
+    scores["memory_mrr_delta"] = float(
+        comparison.get("memory_mrr_delta", 0.0)
+    )
+    scores["memory_pairwise_delta"] = float(
+        comparison.get("memory_pairwise_delta", 0.0)
+    )
     scores["regression"] = float(bool(comparison.get("regression")))
     return scores
 

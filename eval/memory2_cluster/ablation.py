@@ -23,6 +23,13 @@ _SUMMARY_METRICS = (
     "pairwise_accuracy",
     "forbidden_cluster_rate",
     "irrelevant_cluster_rate",
+    "memory_weighted_coverage",
+    "memory_core_recall",
+    "memory_mrr",
+    "memory_ndcg_at_k",
+    "memory_pairwise_accuracy",
+    "memory_forbidden_rate",
+    "memory_irrelevant_rate",
 )
 
 
@@ -68,10 +75,17 @@ def compare_ranking_results(
         "mrr_delta": "cluster_mrr",
         "ndcg_delta": "ndcg_at_k",
         "pairwise_delta": "pairwise_accuracy",
+        "memory_coverage_delta": "memory_weighted_coverage",
+        "memory_core_recall_delta": "memory_core_recall",
+        "memory_mrr_delta": "memory_mrr",
+        "memory_ndcg_delta": "memory_ndcg_at_k",
+        "memory_pairwise_delta": "memory_pairwise_accuracy",
     }
     lower_is_better = {
         "forbidden_rate_delta": "forbidden_cluster_rate",
         "irrelevant_rate_delta": "irrelevant_cluster_rate",
+        "memory_forbidden_rate_delta": "memory_forbidden_rate",
+        "memory_irrelevant_rate_delta": "memory_irrelevant_rate",
     }
     deltas = {
         name: round(float(treatment.get(metric, 0.0)) - float(baseline.get(metric, 0.0)), 12)
@@ -135,6 +149,33 @@ def evaluate_ablation_ranking(
         ranked_cluster_ids, probe.preferred_pairs
     )
     metrics["ndcg_at_k"] = _ndcg_at_k(ranked_cluster_ids, probe.cluster_oracle)
+    if probe.memory_oracle:
+        ranked_memory_ids = [str(hit["local_id"]) for hit in hits]
+        memory_metrics = evaluate_cluster_ranking(
+            cluster_oracle=probe.memory_oracle,
+            ranked_cluster_ids=ranked_memory_ids,
+        )
+        metrics.update(
+            {
+                "memory_weighted_coverage": memory_metrics[
+                    "weighted_cluster_coverage"
+                ],
+                "memory_core_recall": memory_metrics["core_cluster_recall"],
+                "memory_mrr": memory_metrics["cluster_mrr"],
+                "memory_ndcg_at_k": _ndcg_at_k(
+                    ranked_memory_ids, probe.memory_oracle
+                ),
+                "memory_pairwise_accuracy": _pairwise_accuracy(
+                    ranked_memory_ids, probe.preferred_memory_pairs
+                ),
+                "memory_forbidden_rate": memory_metrics[
+                    "forbidden_cluster_rate"
+                ],
+                "memory_irrelevant_rate": memory_metrics[
+                    "irrelevant_cluster_rate"
+                ],
+            }
+        )
     return metrics
 
 

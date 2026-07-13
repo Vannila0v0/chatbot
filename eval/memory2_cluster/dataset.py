@@ -36,6 +36,27 @@ def load_cluster_dataset(
         local_ids = [memory.local_id for memory in timeline.memories]
         if len(local_ids) != len(set(local_ids)):
             raise ValueError(f"时间线 {timeline.timeline_id} 有重复 local_id")
+        if timeline.clusters:
+            cluster_ids = [cluster.cluster_id for cluster in timeline.clusters]
+            if len(cluster_ids) != len(set(cluster_ids)):
+                raise ValueError(f"时间线 {timeline.timeline_id} 有重复 cluster_id")
+            memory_cluster_ids = {memory.cluster_id for memory in timeline.memories}
+            if set(cluster_ids) != memory_cluster_ids:
+                raise ValueError(f"时间线 {timeline.timeline_id} 的 cluster 定义不完整")
+            memory_by_cluster = {
+                cluster_id: {
+                    memory.local_id
+                    for memory in timeline.memories
+                    if memory.cluster_id == cluster_id
+                }
+                for cluster_id in memory_cluster_ids
+            }
+            for cluster in timeline.clusters:
+                if set(cluster.memory_ids) != memory_by_cluster[cluster.cluster_id]:
+                    raise ValueError(
+                        f"时间线 {timeline.timeline_id} 的 cluster "
+                        f"{cluster.cluster_id} 成员不一致"
+                    )
         timelines[timeline.timeline_id] = timeline
 
     probes: list[ClusterProbe] = []
@@ -62,6 +83,22 @@ def load_cluster_dataset(
             raise ValueError(
                 f"case {probe.case_id} 的 preferred_pairs 引用了未知 cluster: "
                 f"{unknown_pair_clusters}"
+            )
+        memory_ids = {memory.local_id for memory in timeline.memories}
+        unknown_memories = sorted(set(probe.memory_oracle) - memory_ids)
+        if unknown_memories:
+            raise ValueError(
+                f"case {probe.case_id} 的 memory_oracle 引用了未知 memory: "
+                f"{unknown_memories}"
+            )
+        pair_memories = {
+            memory_id for pair in probe.preferred_memory_pairs for memory_id in pair
+        }
+        unknown_pair_memories = sorted(pair_memories - memory_ids)
+        if unknown_pair_memories:
+            raise ValueError(
+                f"case {probe.case_id} 的 preferred_memory_pairs 引用了未知 memory: "
+                f"{unknown_pair_memories}"
             )
         case_ids.add(probe.case_id)
         probes.append(probe)
