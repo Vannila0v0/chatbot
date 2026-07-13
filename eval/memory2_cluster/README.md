@@ -99,3 +99,15 @@ python -m eval.memory2_cluster.derive_queries `
 ```
 
 默认每条时间线派生 4 个 query，并按完整时间线顺序切成 60% dev、20% validation、20% test。同一时间线不会跨集合。每个 query 必须标注时间线里的全部 cluster 和 memory；簇级 oracle 衡量相关事件覆盖，memory oracle 用于区分同一簇中的当前状态和过期状态。方向冲突、自比较或引用不存在对象的 preferred pair 会被机械移除。派生后仍需审核 query 和 oracle，冻结测试集不能用于调整参数。
+
+人工确认全部 query 后，保留 candidate 文件并另行生成批准版本：
+
+```powershell
+python -m eval.memory2_cluster.approve_queries `
+  --input .akashic-workspace/eval_candidates/derived_query_candidates.jsonl `
+  --output .akashic-workspace/eval_candidates/approved_queries.jsonl `
+  --manifest .akashic-workspace/eval_candidates/freeze_manifest.json `
+  --approval-note "人工确认全部 query 通过"
+```
+
+批准步骤只把 `review_status` 改成 `approved`，不会修改 query、oracle 或数据划分，并将批准文件的 SHA-256 写入冻结清单。后续实验必须读取 `approved_queries.jsonl`。
