@@ -54,3 +54,17 @@ python -m eval.memory2_cluster.compare `
 ```
 
 报告同时给出 weighted cluster coverage、core recall、MRR、nDCG@K、偏好簇 pairwise accuracy、forbidden rate 和 irrelevant rate。单案例的“改善/退化”使用方向一致的 Pareto 判定：所有变化中只有改善则记为改善，只有变差则记为退化，同时存在好坏变化则单列为 mixed，避免用任意加权总分掩盖风险。
+
+## 从本地消息库抽取候选时间线
+
+`extract_candidates` 使用 SQLite 只读模式，按照本地 windows JSON 中预先确定的互不重叠时间窗口，完整保留窗口内的用户消息、助手回复和主动推送。它只生成尚未标注的候选时间线，不会自动生成 query 或 oracle。
+
+```powershell
+python -m eval.memory2_cluster.extract_candidates `
+  --db .akashic-workspace/sessions.db `
+  --windows .akashic-workspace/eval_candidates/candidate_windows.json `
+  --replacements .akashic-workspace/eval_candidates/entity_replacements.json `
+  --output .akashic-workspace/eval_candidates/natural_candidate_timelines.jsonl
+```
+
+凭据、长数字账号、账号句柄、URL、邮箱和本地路径使用通用规则脱敏；个人经历中的机构名称等语义实体通过本地 replacements JSON 处理。windows、replacements 和抽取后的原始候选均应保留在被 Git 忽略的工作空间内。人工复核并进一步抽象后的合成记忆、cluster oracle 和 query 才能进入公开数据集。
