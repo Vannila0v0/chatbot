@@ -55,6 +55,14 @@ python -m eval.memory2_cluster.compare `
 
 报告同时给出 weighted cluster coverage、core recall、MRR、nDCG@K、偏好簇 pairwise accuracy、forbidden rate 和 irrelevant rate。单案例的“改善/退化”使用方向一致的 Pareto 判定：所有变化中只有改善则记为改善，只有变差则记为退化，同时存在好坏变化则单列为 mixed，避免用任意加权总分掩盖风险。
 
+### LangSmith 排名诊断
+
+A/B Trace 中会记录 `seed_ablation_memories`（预置冻结记忆）、`prepare_fixed_query`（准备固定 query）、`rank_baseline`（基线排序）、`rank_treatment`（热度排序）和 `analyze_rank_changes`（分析两组排名变化）五个子 Run。最后一个子 Run 会检查候选集合、语义分和关键词排名是否一致，并列出 Top-K 进出、记忆升降和偏好顺序变化。
+
+`include_score_diagnostics` 是项目自定义参数，中文含义是“是否把评分计算明细附加到 RRF 返回结果”。默认值为 `False`，生产调用只返回正常结果；评测设为 `True` 时额外记录向量排名、关键词排名及两侧 RRF 贡献。该参数只允许增加诊断字段，不得改变排序、分数或截断数量。
+
+候选诊断包含语义分、reinforcement、记忆年龄、频度因子、时间衰减因子、情绪权重影响后的有效半衰期、热度分、两部分加权贡献和最终 RRF 排名。原始 embedding、API key、本地路径和 source_ref 不上传；query embedding 只记录 SHA-256 指纹。
+
 ## 从本地消息库抽取候选时间线
 
 `extract_candidates` 使用 SQLite 只读模式，按照本地 windows JSON 中预先确定的互不重叠时间窗口，完整保留窗口内的用户消息、助手回复和主动推送。它只生成尚未标注的候选时间线，不会自动生成 query 或 oracle。

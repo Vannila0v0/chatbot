@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from datetime import datetime, timedelta
 from typing import Any
@@ -190,6 +192,196 @@ def _stable_keyword_rank(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def _query_vector_sha256(query_vector: list[float]) -> str:
+    """只记录查询向量的指纹，不上传原始 embedding。"""
+    payload = json.dumps(query_vector, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest().upper()
+
+
+def _candidate_diagnostics(
+    *,
+    records: list[dict[str, Any]],
+    keyword_items: list[dict[str, Any]],
+    item_to_local: dict[str, str],
+    memories_by_local: dict[str, Any],
+    probe: ClusterProbe,
+) -> list[dict[str, Any]]:
+    """生成脱敏后的候选评分明细，不包含 embedding、路径或 source_ref。"""
+    keyword_scores = {
+        str(item.get("id", "")): float(item.get("keyword_score", 0.0))
+        for item in keyword_items
+    }
+    diagnostics: list[dict[str, Any]] = []
+    for record in records:
+        memory_id = str(record.get("id", ""))
+        local_id = item_to_local.get(memory_id, "")
+        memory = memories_by_local.get(local_id)
+        score_debug = dict(record.get("_score_debug") or {})
+        rrf_debug = dict(record.get("_rrf_debug") or {})
+        final_rank = int(rrf_debug.get("final_rank") or 0)
+        diagnostics.append(
+            {
+                "memory_id": memory_id,
+                "local_id": local_id,
+                "cluster_id": getattr(memory, "cluster_id", "unknown"),
+                "memory_type": getattr(memory, "memory_type", record.get("memory_type")),
+                "summary": getattr(memory, "summary", str(record.get("summary", ""))),
+                "cluster_oracle_role": probe.cluster_oracle.get(
+                    getattr(memory, "cluster_id", "unknown"), "unlabeled"
+                ),
+                "memory_oracle_role": probe.memory_oracle.get(local_id, "unlabeled"),
+                "semantic_score": score_debug.get("semantic"),
+                "reinforcement": score_debug.get(
+                    "reinforcement", getattr(memory, "reinforcement", None)
+                ),
+                "emotional_weight": score_debug.get(
+                    "emotional_weight", getattr(memory, "emotional_weight", None)
+                ),
+                "age_days": score_debug.get(
+                    "age_days", getattr(memory, "last_used_days_ago", None)
+                ),
+                "base_half_life_days": score_debug.get("base_half_life_days"),
+                "effective_half_life_days": score_debug.get(
+                    "effective_half_life_days"
+                ),
+                "frequency_factor": score_debug.get("frequency_factor"),
+                "recency_factor": score_debug.get("recency_factor"),
+                "hotness_score": score_debug.get("hotness"),
+                "hotness_alpha": score_debug.get("alpha"),
+                "semantic_contribution": score_debug.get("semantic_contribution"),
+                "hotness_contribution": score_debug.get("hotness_contribution"),
+                "vector_final_score": score_debug.get("final"),
+                "vector_rank": rrf_debug.get("vector_rank"),
+                "keyword_score": keyword_scores.get(memory_id),
+                "keyword_rank": rrf_debug.get("keyword_rank"),
+                "vector_rrf_contribution": rrf_debug.get("vector_contribution"),
+                "keyword_rrf_contribution": rrf_debug.get(
+                    "keyword_contribution"
+                ),
+                "rrf_score": rrf_debug.get("rrf_score"),
+                "final_rank": final_rank,
+                "selected": 0 < final_rank <= probe.top_k,
+            }
+        )
+    return diagnostics
+
+
+def _rank_change_type(role: str, baseline_rank: int, treatment_rank: int) -> str:
+    if treatment_rank == baseline_rank:
+        return "unchanged"
+    direction = "promoted" if treatment_rank < baseline_rank else "demoted"
+    if role in {"core", "forbidden", "irrelevant"}:
+        return f"{role}_{direction}"
+    return direction
+
+
+def _analyze_rank_changes(
+    *,
+    baseline: list[dict[str, Any]],
+    treatment: list[dict[str, Any]],
+    probe: ClusterProbe,
+    query_embedding_sha256: str,
+) -> dict[str, Any]:
+    baseline_by_id = {str(item["local_id"]): item for item in baseline}
+    treatment_by_id = {str(item["local_id"]): item for item in treatment}
+    baseline_ids = set(baseline_by_id)
+    treatment_ids = set(treatment_by_id)
+    common_ids = baseline_ids & treatment_ids
+
+    semantic_scores_match = all(
+        math.isclose(
+            float(baseline_by_id[item_id].get("semantic_score") or 0.0),
+            float(treatment_by_id[item_id].get("semantic_score") or 0.0),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+        for item_id in common_ids
+    )
+    keyword_ranks_match = all(
+        baseline_by_id[item_id].get("keyword_rank")
+        == treatment_by_id[item_id].get("keyword_rank")
+        for item_id in common_ids
+    )
+    integrity = {
+        "candidate_ids_match": baseline_ids == treatment_ids,
+        "semantic_scores_match": semantic_scores_match,
+        "keyword_ranks_match": keyword_ranks_match,
+        "query_embedding_sha256": query_embedding_sha256,
+    }
+    integrity["ablation_integrity_passed"] = all(
+        bool(value)
+        for key, value in integrity.items()
+        if key != "query_embedding_sha256"
+    )
+
+    rank_changes: list[dict[str, Any]] = []
+    for local_id in sorted(common_ids):
+        baseline_item = baseline_by_id[local_id]
+        treatment_item = treatment_by_id[local_id]
+        baseline_rank = int(baseline_item["final_rank"])
+        treatment_rank = int(treatment_item["final_rank"])
+        if baseline_rank == treatment_rank:
+            continue
+        role = str(treatment_item.get("memory_oracle_role") or "unlabeled")
+        baseline_selected = bool(baseline_item.get("selected"))
+        treatment_selected = bool(treatment_item.get("selected"))
+        change_type = _rank_change_type(role, baseline_rank, treatment_rank)
+        if baseline_selected and not treatment_selected:
+            change_type = "top_k_dropped"
+        elif treatment_selected and not baseline_selected:
+            change_type = "top_k_entered"
+        rank_changes.append(
+            {
+                "local_id": local_id,
+                "cluster_id": treatment_item.get("cluster_id"),
+                "memory_oracle_role": role,
+                "baseline_vector_rank": baseline_item.get("vector_rank"),
+                "treatment_vector_rank": treatment_item.get("vector_rank"),
+                "baseline_final_rank": baseline_rank,
+                "treatment_final_rank": treatment_rank,
+                "rank_change_treatment_minus_baseline": treatment_rank
+                - baseline_rank,
+                "baseline_selected": baseline_selected,
+                "treatment_selected": treatment_selected,
+                "change_type": change_type,
+            }
+        )
+
+    pair_changes: list[dict[str, Any]] = []
+    for preferred, less_preferred in probe.preferred_memory_pairs:
+        if preferred not in common_ids or less_preferred not in common_ids:
+            continue
+        baseline_correct = (
+            int(baseline_by_id[preferred]["final_rank"])
+            < int(baseline_by_id[less_preferred]["final_rank"])
+        )
+        treatment_correct = (
+            int(treatment_by_id[preferred]["final_rank"])
+            < int(treatment_by_id[less_preferred]["final_rank"])
+        )
+        if baseline_correct == treatment_correct:
+            continue
+        pair_changes.append(
+            {
+                "preferred_local_id": preferred,
+                "less_preferred_local_id": less_preferred,
+                "baseline_correct": baseline_correct,
+                "treatment_correct": treatment_correct,
+                "change_type": (
+                    "preferred_pair_fixed"
+                    if treatment_correct
+                    else "preferred_pair_broken"
+                ),
+            }
+        )
+
+    return {
+        "ablation_integrity": integrity,
+        "rank_changes": rank_changes,
+        "preferred_memory_pair_changes": pair_changes,
+    }
+
+
 async def run_paired_ablation(
     runtime: Any,
     timeline: EventTimeline,
@@ -227,12 +419,32 @@ async def run_paired_ablation(
                 (memory.reinforcement, updated_at.isoformat(), item_id),
             )
         store._db.commit()
-        stage.set_outputs({"seeded_count": len(local_to_item_id)})
+        stage.set_outputs(
+            {
+                "seeded_count": len(local_to_item_id),
+                "evaluation_time": evaluation_time.isoformat(),
+                "local_to_memory_id": local_to_item_id,
+            }
+        )
+
+    item_to_local = {item_id: local_id for local_id, item_id in local_to_item_id.items()}
+    local_to_cluster = {
+        memory.local_id: memory.cluster_id for memory in timeline.memories
+    }
+    memories_by_local = {memory.local_id: memory for memory in timeline.memories}
 
     with traced_stage(tracing, "prepare_fixed_query", {"query": probe.query}) as stage:
         query_vector = await embedder.embed(probe.query)
         terms = _extract_terms(probe.query)
-        stage.set_outputs({"keyword_terms": terms})
+        query_embedding_sha256 = _query_vector_sha256(query_vector)
+        stage.set_outputs(
+            {
+                "keyword_terms": terms,
+                "query_embedding_sha256": query_embedding_sha256,
+                "top_k": probe.top_k,
+                "candidate_limit": max(len(timeline.memories), probe.top_k * 4),
+            }
+        )
 
     candidate_limit = max(len(timeline.memories), probe.top_k * 4)
     common = {
@@ -249,10 +461,27 @@ async def run_paired_ablation(
             time_end=evaluation_time,
         ) if terms else []
         keyword_rank = _stable_keyword_rank(keyword_items)
-        baseline_final = _rrf_merge(
-            baseline_vector, keyword_rank, top_n=probe.top_k
+        baseline_merged = _rrf_merge(
+            baseline_vector,
+            keyword_rank,
+            top_n=candidate_limit,
+            include_score_diagnostics=True,
         )
-        stage.set_outputs({"result_count": len(baseline_final)})
+        baseline_final = baseline_merged[: probe.top_k]
+        baseline_diagnostics = _candidate_diagnostics(
+            records=baseline_merged,
+            keyword_items=keyword_rank,
+            item_to_local=item_to_local,
+            memories_by_local=memories_by_local,
+            probe=probe,
+        )
+        stage.set_outputs(
+            {
+                "result_count": len(baseline_final),
+                "candidate_count": len(baseline_diagnostics),
+                "candidates": baseline_diagnostics,
+            }
+        )
 
     with traced_stage(
         tracing,
@@ -264,13 +493,36 @@ async def run_paired_ablation(
             hotness_half_life_days=half_life_days,
             **common,
         )
-        treatment_final = _rrf_merge(
-            treatment_vector, keyword_rank, top_n=probe.top_k
+        treatment_merged = _rrf_merge(
+            treatment_vector,
+            keyword_rank,
+            top_n=candidate_limit,
+            include_score_diagnostics=True,
         )
-        stage.set_outputs({"result_count": len(treatment_final)})
+        treatment_final = treatment_merged[: probe.top_k]
+        treatment_diagnostics = _candidate_diagnostics(
+            records=treatment_merged,
+            keyword_items=keyword_rank,
+            item_to_local=item_to_local,
+            memories_by_local=memories_by_local,
+            probe=probe,
+        )
+        stage.set_outputs(
+            {
+                "result_count": len(treatment_final),
+                "candidate_count": len(treatment_diagnostics),
+                "candidates": treatment_diagnostics,
+            }
+        )
 
-    item_to_local = {item_id: local_id for local_id, item_id in local_to_item_id.items()}
-    local_to_cluster = {memory.local_id: memory.cluster_id for memory in timeline.memories}
+    with traced_stage(tracing, "analyze_rank_changes") as stage:
+        ranking_diagnostics = _analyze_rank_changes(
+            baseline=baseline_diagnostics,
+            treatment=treatment_diagnostics,
+            probe=probe,
+            query_embedding_sha256=query_embedding_sha256,
+        )
+        stage.set_outputs(ranking_diagnostics)
     baseline_hits = map_ranked_hits(
         records=baseline_final,
         item_to_local_id=item_to_local,
@@ -312,6 +564,11 @@ async def run_paired_ablation(
             "keyword_rank_ids": [str(item.get("id", "")) for item in keyword_rank],
         },
         "comparison": comparison,
+        "diagnostics": {
+            **ranking_diagnostics,
+            "baseline_candidates": baseline_diagnostics,
+            "treatment_candidates": treatment_diagnostics,
+        },
         "passed": overall_passed,
         "score": sum(score_parts) / len(score_parts),
         "error": None,

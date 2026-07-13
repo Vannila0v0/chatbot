@@ -16,9 +16,15 @@ from __future__ import annotations
 from typing import Any, cast
 
 import math
+import pytest
 from datetime import datetime, timedelta, timezone
 
-from memory2.store import MemoryStore2
+from memory2.store import (
+    MemoryStore2,
+    _SQLITE_VEC_AVAILABLE,
+    _hotness_components,
+)
+from memory2.retriever import _rrf_merge
 
 
 def _as_record(value: object) -> dict[str, object]:
@@ -310,6 +316,110 @@ def test_emotional_weight_extends_hotness_half_life_in_ranking(tmp_path):
     assert cast(dict[str, float], _as_record(results[0]).get("_score_debug", {}))["hotness"] > cast(
         dict[str, float], _as_record(results[1]).get("_score_debug", {})
     )["hotness"]
+
+
+def test_hotness_diagnostics_decompose_the_exact_formula() -> None:
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    components = _hotness_components(
+        reinforcement=4,
+        updated_at=now - timedelta(days=14),
+        now=now,
+        half_life_days=14.0,
+        emotional_weight=0,
+    )
+
+    assert components["age_days"] == 14.0
+    assert components["effective_half_life_days"] == 14.0
+    assert math.isclose(float(components["recency_factor"]), 0.5)
+    assert math.isclose(
+        float(components["frequency_factor"])
+        * float(components["recency_factor"]),
+        float(components["hotness"]),
+    )
+
+
+def test_vector_score_diagnostics_add_up_without_changing_score(tmp_path) -> None:
+    store = MemoryStore2(tmp_path / "m.db")
+    item = store.upsert_item("event", "测试记忆", embedding=[1.0, 0.0], extra={})
+    item_id = item.split(":", 1)[1]
+    store._db.execute(
+        "UPDATE memory_items SET reinforcement=4, updated_at=? WHERE id=?",
+        (_days_ago(14), item_id),
+    )
+    store._db.commit()
+
+    result = store.vector_search(
+        query_vec=[1.0, 0.0],
+        top_k=1,
+        score_threshold=0.0,
+        hotness_alpha=0.2,
+        hotness_half_life_days=14.0,
+    )[0]
+    debug = cast(dict[str, float], _as_record(result)["_score_debug"])
+
+    assert math.isclose(
+        debug["frequency_factor"] * debug["recency_factor"],
+        debug["hotness"],
+    )
+    assert math.isclose(
+        debug["semantic_contribution"] + debug["hotness_contribution"],
+        debug["final"],
+    )
+    assert result["score"] == round(debug["final"], 4)
+
+
+@pytest.mark.skipif(not _SQLITE_VEC_AVAILABLE, reason="sqlite-vec 未安装")
+def test_sqlite_vec_path_exposes_the_same_score_diagnostic_fields(tmp_path) -> None:
+    store = MemoryStore2(tmp_path / "m.db", vec_dim=2)
+    store.upsert_item("event", "测试记忆", embedding=[1.0, 0.0], extra={})
+
+    result = store.vector_search(
+        query_vec=[1.0, 0.0], top_k=1, score_threshold=0.0, hotness_alpha=0.2
+    )[0]
+    debug = cast(dict[str, object], _as_record(result)["_score_debug"])
+
+    assert {
+        "semantic",
+        "reinforcement",
+        "emotional_weight",
+        "age_days",
+        "frequency_factor",
+        "recency_factor",
+        "hotness",
+        "semantic_contribution",
+        "hotness_contribution",
+        "final",
+    } <= set(debug)
+
+
+def test_rrf_score_diagnostics_do_not_change_ranking() -> None:
+    vector_items = [
+        {"id": "a", "score": 0.9},
+        {"id": "b", "score": 0.8},
+    ]
+    keyword_items = [
+        {"id": "b", "keyword_score": 1.0},
+        {"id": "a", "keyword_score": 0.5},
+    ]
+
+    normal = _rrf_merge(vector_items, keyword_items, top_n=2)
+    diagnostic = _rrf_merge(
+        vector_items,
+        keyword_items,
+        top_n=2,
+        include_score_diagnostics=True,
+    )
+
+    assert [item["id"] for item in normal] == [item["id"] for item in diagnostic]
+    assert [item["rrf_score"] for item in normal] == [
+        item["rrf_score"] for item in diagnostic
+    ]
+    for item in diagnostic:
+        debug = cast(dict[str, float], item["_rrf_debug"])
+        assert math.isclose(
+            debug["vector_contribution"] + debug["keyword_contribution"],
+            debug["rrf_score"],
+        )
 
 
 # ─── C. 热度公式规格预验证（与实现无关的数学验证）──────────────────────────────
