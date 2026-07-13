@@ -78,16 +78,22 @@ def _metric_evaluator(run: Any, example: Any):
 
 
 async def run_experiment(
-    *, target: Any, data: Any, experiment_prefix: str, max_concurrency: int
+    *,
+    target: Any,
+    data: Any,
+    experiment_prefix: str,
+    max_concurrency: int,
+    evaluators: list[Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Any:
     return await _aevaluate(
         target,
         data=data,
-        evaluators=[_metric_evaluator],
+        evaluators=evaluators or [_metric_evaluator],
         experiment_prefix=experiment_prefix,
         max_concurrency=max(1, max_concurrency),
         blocking=True,
-        metadata={"benchmark": "memory2-quality"},
+        metadata=metadata or {"benchmark": "memory2-quality"},
     )
 
 
@@ -175,8 +181,13 @@ class LangSmithSink:
                         "sessions": case.get("sessions", []),
                         "initial_memories": case.get("initial_memories", []),
                         "recall_probes": case.get("recall_probes", []),
+                        "query": case.get("query"),
+                        "query_time": case.get("query_time"),
                     },
-                    "outputs": {"expected_write": case.get("expected_write", {})},
+                    "outputs": {
+                        "expected_write": case.get("expected_write", {}),
+                        "cluster_oracle": case.get("cluster_oracle", {}),
+                    },
                     "metadata": {
                         "category": case.get("category"),
                         "source": case.get("source"),
