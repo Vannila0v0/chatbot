@@ -21,6 +21,7 @@ class ClusterMemory(StrictModel):
     summary: str = Field(min_length=1)
     happened_at: datetime
     reinforcement: int = Field(default=1, ge=0)
+    last_used_days_ago: float = Field(default=0.0, ge=0.0)
     emotional_weight: int = Field(default=0, ge=0, le=10)
 
 
@@ -38,4 +39,6 @@ class ClusterProbe(StrictModel):
     query_time: datetime
     top_k: int = Field(default=8, gt=0)
     cluster_oracle: dict[str, ClusterRole] = Field(min_length=1)
+    preferred_pairs: list[tuple[str, str]] = Field(default_factory=list)
+    split: Literal["natural", "challenge"] = "natural"
     tags: list[str] = Field(default_factory=list)

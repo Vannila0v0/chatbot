@@ -56,6 +56,13 @@ def load_cluster_dataset(
             raise ValueError(f"case {probe.case_id} 引用了未知 cluster: {unknown_clusters}")
         if "core" not in probe.cluster_oracle.values():
             raise ValueError(f"case {probe.case_id} 至少需要一个 core cluster")
+        pair_clusters = {cluster_id for pair in probe.preferred_pairs for cluster_id in pair}
+        unknown_pair_clusters = sorted(pair_clusters - cluster_ids)
+        if unknown_pair_clusters:
+            raise ValueError(
+                f"case {probe.case_id} 的 preferred_pairs 引用了未知 cluster: "
+                f"{unknown_pair_clusters}"
+            )
         case_ids.add(probe.case_id)
         probes.append(probe)
     return timelines, probes
