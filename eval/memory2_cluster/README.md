@@ -68,3 +68,16 @@ python -m eval.memory2_cluster.extract_candidates `
 ```
 
 凭据、长数字账号、账号句柄、URL、邮箱和本地路径使用通用规则脱敏；个人经历中的机构名称等语义实体通过本地 replacements JSON 处理。windows、replacements 和抽取后的原始候选均应保留在被 Git 忽略的工作空间内。人工复核并进一步抽象后的合成记忆、cluster oracle 和 query 才能进入公开数据集。
+
+候选时间线冻结后，可以生成仅供人工审核的记忆和事件簇草稿：
+
+```powershell
+python -m eval.memory2_cluster.draft_clusters `
+  --config config.toml `
+  --input .akashic-workspace/eval_candidates/natural_candidate_timelines.jsonl `
+  --output .akashic-workspace/eval_candidates/memory_cluster_drafts.jsonl `
+  --review-output .akashic-workspace/eval_candidates/memory_cluster_review.md `
+  --workers 2
+```
+
+生成器不会创建 query 或 oracle。每条记忆必须通过真实 `source_ref` 校验，memory 与 cluster 必须双向一致；失败任务会记录错误，同时保留已经成功的结果，重新运行时支持断点续跑。审核表会优先列出低置信度和 assistant-only 记忆，人工确认后才能进入下一阶段。
