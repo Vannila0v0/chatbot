@@ -107,3 +107,4 @@ def test_evaluate_ablation_ranking_distinguishes_memories_in_same_cluster() -> N
     assert metrics["memory_mrr"] == 0.5
     assert metrics["memory_pairwise_accuracy"] == 0.0
     assert metrics["memory_forbidden_rate"] == 1.0
+    assert metrics["memory_passed"] is False

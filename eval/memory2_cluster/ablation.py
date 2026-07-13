@@ -174,6 +174,10 @@ def evaluate_ablation_ranking(
                 "memory_irrelevant_rate": memory_metrics[
                     "irrelevant_cluster_rate"
                 ],
+                "memory_minimum_core_gate_passed": memory_metrics[
+                    "minimum_core_gate_passed"
+                ],
+                "memory_passed": memory_metrics["passed"],
             }
         )
     return metrics
@@ -282,6 +286,12 @@ async def run_paired_ablation(
     comparison = compare_ranking_results(
         baseline=baseline_metrics, treatment=treatment_metrics
     )
+    cluster_passed = bool(treatment_metrics["passed"])
+    memory_passed = bool(treatment_metrics.get("memory_passed", True))
+    overall_passed = cluster_passed and memory_passed
+    score_parts = [float(treatment_metrics["weighted_cluster_coverage"])]
+    if "memory_weighted_coverage" in treatment_metrics:
+        score_parts.append(float(treatment_metrics["memory_weighted_coverage"]))
     return {
         "case_id": probe.case_id,
         "timeline_id": timeline.timeline_id,
@@ -302,7 +312,7 @@ async def run_paired_ablation(
             "keyword_rank_ids": [str(item.get("id", "")) for item in keyword_rank],
         },
         "comparison": comparison,
-        "passed": bool(treatment_metrics["passed"]),
-        "score": float(treatment_metrics["weighted_cluster_coverage"]),
+        "passed": overall_passed,
+        "score": sum(score_parts) / len(score_parts),
         "error": None,
     }

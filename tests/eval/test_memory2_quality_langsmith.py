@@ -56,11 +56,29 @@ def test_sink_creates_dataset_example_and_case_trace() -> None:
 
     client = Client()
     sink = LangSmithSink(client=client, project_name="experiment")
-    case = {"case_id": "c1", "expected_write": {"required": []}}
+    case = {
+        "case_id": "c1",
+        "timeline_id": "timeline-1",
+        "dataset_split": "dev",
+        "top_k": 5,
+        "tags": ["temporal"],
+        "preferred_pairs": [["new", "old"]],
+        "preferred_memory_pairs": [["new-memory", "old-memory"]],
+        "cluster_oracle": {"new": "core", "old": "forbidden"},
+        "memory_oracle": {"new-memory": "core", "old-memory": "forbidden"},
+        "review_status": "approved",
+        "timelines_sha256": "timeline-hash",
+        "dataset_sha256": "dataset-hash",
+        "expected_write": {"required": []},
+    }
     asyncio.run(sink.sync_dataset("memory2-quality-v1", [case]))
     result = {"passed": True, "score": 1.0}
     asyncio.run(sink.record_case(case, result))
     assert client.examples[0]["dataset_id"] == "dataset-1"
+    assert client.examples[0]["inputs"]["timeline_id"] == "timeline-1"
+    assert client.examples[0]["inputs"]["dataset_split"] == "dev"
+    assert client.examples[0]["outputs"]["memory_oracle"]["new-memory"] == "core"
+    assert client.examples[0]["metadata"]["review_status"] == "approved"
     assert result["run_id"]
     assert [entry[0] for entry in client.runs] == ["create", "update", "feedback"]
 

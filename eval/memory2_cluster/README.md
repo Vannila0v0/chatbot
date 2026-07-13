@@ -111,3 +111,21 @@ python -m eval.memory2_cluster.approve_queries `
 ```
 
 批准步骤只把 `review_status` 改成 `approved`，不会修改 query、oracle 或数据划分，并将批准文件的 SHA-256 写入冻结清单。后续实验必须读取 `approved_queries.jsonl`。
+
+正式运行前先做 Dev dry-run。它只校验数据划分、审批状态、冻结文件哈希和运行参数，不会初始化记忆运行时、调用模型、生成 embedding 或上传 LangSmith：
+
+```powershell
+python -m eval.memory2_cluster.compare `
+  --config config.toml `
+  --timelines .akashic-workspace/eval_candidates/frozen_memory_timelines.jsonl `
+  --dataset .akashic-workspace/eval_candidates/approved_queries.jsonl `
+  --dataset-split dev `
+  --require-approved `
+  --dry-run `
+  --workers 2 `
+  --treatment-alpha 0.2 `
+  --half-life-days 14 `
+  --output .akashic-workspace/eval_candidates/dev_dry_run
+```
+
+确认 `dry-run.json` 中只有 Dev case、状态均为 `approved` 且两个 SHA-256 与冻结清单一致后，移除 `--dry-run` 才会执行真实 A/B。需要同步 LangSmith 时再显式添加 `--langsmith`；Validation/Test 不应在调参阶段运行。
