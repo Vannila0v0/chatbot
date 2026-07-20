@@ -30,6 +30,8 @@ from proactive_v2.state import ProactiveStateStore
 from core.common.timekit import utcnow
 from core.memory.engine import MemoryAdminApi
 from session.store import SessionStore
+from web.api.routes import create_turn_router
+from web.turns.repository import TurnRepository
 
 logger = logging.getLogger(__name__)
 
@@ -734,6 +736,7 @@ def create_dashboard_app(
     manual_memory_optimizer: ManualMemoryOptimizer | None = None,
     memory_admin: MemoryAdminApi,
     memory_store: MemoryStore | None = None,
+    turn_repository: TurnRepository | None = None,
 ) -> FastAPI:
     workspace.mkdir(parents=True, exist_ok=True)
     store = SessionStore(workspace / "sessions.db")
@@ -775,6 +778,8 @@ def create_dashboard_app(
     app.state.memory_admin = memory_admin
     app.state.memory_store = memory_store or MemoryStore(workspace)
     app.mount("/assets", StaticFiles(directory=static_dir), name="dashboard-assets")
+    if turn_repository is not None:
+        app.include_router(create_turn_router(turn_repository))
 
     # Compile TypeScript plugin panels and mount plugin routes
     if plugins_root.is_dir():
@@ -1393,6 +1398,7 @@ def run_dashboard_api(
     manual_memory_optimizer: ManualMemoryOptimizer | None = None,
     memory_admin: MemoryAdminApi,
     memory_store: MemoryStore | None = None,
+    turn_repository: TurnRepository | None = None,
 ) -> None:
     server = uvicorn.Server(
         _build_dashboard_uvicorn_config(
@@ -1403,6 +1409,7 @@ def run_dashboard_api(
             manual_memory_optimizer=manual_memory_optimizer,
             memory_admin=memory_admin,
             memory_store=memory_store,
+            turn_repository=turn_repository,
         )
     )
     server.run()
@@ -1417,6 +1424,7 @@ def _build_dashboard_uvicorn_config(
     manual_memory_optimizer: ManualMemoryOptimizer | None = None,
     memory_admin: MemoryAdminApi,
     memory_store: MemoryStore | None = None,
+    turn_repository: TurnRepository | None = None,
 ) -> uvicorn.Config:
     config = uvicorn.Config(
         create_dashboard_app(
@@ -1425,6 +1433,7 @@ def _build_dashboard_uvicorn_config(
             manual_memory_optimizer=manual_memory_optimizer,
             memory_admin=memory_admin,
             memory_store=memory_store,
+            turn_repository=turn_repository,
         ),
         host=host,
         port=port,
@@ -1443,6 +1452,7 @@ def build_dashboard_server(
     manual_memory_optimizer: ManualMemoryOptimizer | None = None,
     memory_admin: MemoryAdminApi,
     memory_store: MemoryStore | None = None,
+    turn_repository: TurnRepository | None = None,
 ) -> uvicorn.Server:
     config = _build_dashboard_uvicorn_config(
         workspace=workspace,
@@ -1452,5 +1462,6 @@ def build_dashboard_server(
         manual_memory_optimizer=manual_memory_optimizer,
         memory_admin=memory_admin,
         memory_store=memory_store,
+        turn_repository=turn_repository,
     )
     return uvicorn.Server(config)

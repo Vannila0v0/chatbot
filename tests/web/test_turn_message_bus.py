@@ -188,3 +188,37 @@ async def test_agent_loop_error_response_preserves_turn_id() -> None:
 
     assert len(received) == 1
     assert received[0].metadata["turn_id"] == "turn-1"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_polling_publishes_turn_created_after_start(repository) -> None:
+    bus = _FakeBus()
+    dispatcher = WebTurnDispatcher(repository, bus)
+    task = asyncio.create_task(dispatcher.run(poll_interval_seconds=0.01))
+
+    turn = repository.create(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        client_request_id="request-1",
+        content="hello",
+    )
+    for _ in range(50):
+        if bus.inbound:
+            break
+        await asyncio.sleep(0.01)
+    dispatcher.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+    assert len(bus.inbound) == 1
+    assert bus.inbound[0].metadata["turn_id"] == turn.id
+    stored = repository.get(turn.id)
+    assert stored is not None
+    assert stored.status is TurnStatus.PROCESSING
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_polling_rejects_non_positive_interval(repository) -> None:
+    dispatcher = WebTurnDispatcher(repository, _FakeBus())
+
+    with pytest.raises(ValueError, match="greater than zero"):
+        await dispatcher.run(poll_interval_seconds=0)
