@@ -10,6 +10,8 @@ import pytest
 from agent.looping.core import AgentLoop
 from bus.events import InboundMessage, OutboundMessage
 from bus.queue import MessageBus
+from web.events.broker import WebTurnEventBroker
+from web.events.models import WebTurnEventType
 from web.turns.message_bus import WebTurnCompletionHandler, WebTurnDispatcher
 from web.turns.models import TurnStatus
 from web.turns.sqlite_repository import SQLiteTurnRepository
@@ -88,8 +90,10 @@ async def test_dispatch_failure_marks_claimed_turn_failed(repository) -> None:
     )
     bus = _FakeBus()
     bus.publish_error = RuntimeError("bus unavailable")
+    broker = WebTurnEventBroker()
+    subscription = broker.subscribe(turn.id)
 
-    dispatched = await WebTurnDispatcher(repository, bus).run_once()
+    dispatched = await WebTurnDispatcher(repository, bus, broker).run_once()
 
     assert dispatched is True
     stored = repository.get(turn.id)
@@ -97,6 +101,10 @@ async def test_dispatch_failure_marks_claimed_turn_failed(repository) -> None:
     assert stored.status is TurnStatus.FAILED
     assert stored.error_code == "dispatch_error"
     assert stored.error_message == "bus unavailable"
+    event = await subscription.receive()
+    assert event is not None
+    assert event.type is WebTurnEventType.TURN_FAILED
+    assert event.payload["error_code"] == "dispatch_error"
 
 
 @pytest.mark.asyncio
@@ -109,7 +117,10 @@ async def test_completion_handler_subscribes_and_persists_answer(repository) -> 
     )
     repository.claim_next_pending()
     bus = _FakeBus()
-    handler = WebTurnCompletionHandler(repository)
+    broker = WebTurnEventBroker()
+    subscription = broker.subscribe(turn.id)
+    bridge = MagicMock()
+    handler = WebTurnCompletionHandler(repository, broker, bridge)
     handler.subscribe(bus)
 
     await bus.subscriptions["web"](
@@ -125,6 +136,40 @@ async def test_completion_handler_subscribes_and_persists_answer(repository) -> 
     assert stored is not None
     assert stored.status is TurnStatus.DONE
     assert stored.answer == "hi there"
+    event = await subscription.receive()
+    assert event is not None
+    assert event.type is WebTurnEventType.TURN_COMPLETED
+    assert event.payload == {"answer": "hi there"}
+    bridge.forget_turn.assert_called_once_with(turn.id)
+
+
+@pytest.mark.asyncio
+async def test_completion_still_persists_after_live_broker_shutdown(repository) -> None:
+    turn = repository.create(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        client_request_id="request-1",
+        content="hello",
+    )
+    repository.claim_next_pending()
+    broker = WebTurnEventBroker()
+    await broker.aclose()
+    bridge = MagicMock()
+
+    await WebTurnCompletionHandler(repository, broker, bridge).handle(
+        OutboundMessage(
+            channel="web",
+            chat_id="conversation-1",
+            content="durable answer",
+            metadata={"turn_id": turn.id},
+        )
+    )
+
+    stored = repository.get(turn.id)
+    assert stored is not None
+    assert stored.status is TurnStatus.DONE
+    assert stored.answer == "durable answer"
+    bridge.forget_turn.assert_called_once_with(turn.id)
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
+from web.api.sse import create_turn_event_response
 from web.api.schemas import CreateTurnRequest, TurnResponse
+from web.events.broker import WebTurnEventBroker
 from web.turns.repository import IdempotencyConflictError, TurnRepository
 
 
-def create_turn_router(repository: TurnRepository) -> APIRouter:
+def create_turn_router(
+    repository: TurnRepository,
+    event_broker: WebTurnEventBroker | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api/turns", tags=["web-turns"])
 
     @router.post("", response_model=TurnResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -40,5 +46,19 @@ def create_turn_router(repository: TurnRepository) -> APIRouter:
                 },
             )
         return TurnResponse.from_turn(turn)
+
+    if event_broker is not None:
+
+        @router.get("/{turn_id}/events", response_class=StreamingResponse)
+        async def stream_turn_events(
+            turn_id: str,
+            request: Request,
+        ) -> StreamingResponse:
+            return create_turn_event_response(
+                turn_id=turn_id,
+                request=request,
+                repository=repository,
+                broker=event_broker,
+            )
 
     return router

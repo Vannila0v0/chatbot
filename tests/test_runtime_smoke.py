@@ -178,6 +178,7 @@ async def test_serve_smoke_loads_config_and_runs_shutdown(monkeypatch, tmp_path)
     )
     def _build_dashboard_server(**kwargs):
         observed["turn_repository"] = kwargs["turn_repository"]
+        observed["turn_event_broker"] = kwargs["turn_event_broker"]
         return _FakeDashboardServer()
 
     monkeypatch.setattr(
@@ -193,6 +194,7 @@ async def test_serve_smoke_loads_config_and_runs_shutdown(monkeypatch, tmp_path)
     assert "scheduler" in observed
     assert "bus" in observed
     assert observed["turn_repository"] is not None
+    assert observed["turn_event_broker"] is not None
     assert (tmp_path / ".akashic" / "workspace" / "web.db").exists()
     assert cast(SharedHttpResources, observed["http_resources"]).closed is True
 

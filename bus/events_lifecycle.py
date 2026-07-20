@@ -39,6 +39,7 @@ class TurnStarted:
     chat_id: str
     content: str
     timestamp: datetime
+    turn_id: str | None = None
 
 
 @dataclass(frozen=True)

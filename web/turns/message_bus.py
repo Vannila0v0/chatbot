@@ -3,10 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from bus.events import InboundItem, InboundMessage, OutboundMessage
 from web.turns.repository import TurnRepository
+from web.events.broker import WebTurnEventBroker
+from web.events.models import WebTurnEventType
+
+if TYPE_CHECKING:
+    from web.events.bridge import WebTurnEventBridge
 
 WEB_CHANNEL = "web"
 
@@ -26,9 +31,15 @@ class WebTurnBus(Protocol):
 class WebTurnDispatcher:
     """Claims one persisted Web turn and publishes it to the Agent message bus."""
 
-    def __init__(self, repository: TurnRepository, bus: WebTurnBus) -> None:
+    def __init__(
+        self,
+        repository: TurnRepository,
+        bus: WebTurnBus,
+        event_broker: WebTurnEventBroker | None = None,
+    ) -> None:
         self._repository = repository
         self._bus = bus
+        self._event_broker = event_broker
         self._running = False
 
     async def run(self, poll_interval_seconds: float = 0.25) -> None:
@@ -62,19 +73,36 @@ class WebTurnDispatcher:
             await self._bus.publish_inbound(inbound)
         except Exception as exc:
             logger.exception("Failed to dispatch Web turn %s", turn.id)
-            _ = self._repository.mark_failed(
+            failed = self._repository.mark_failed(
                 turn.id,
                 error_code="dispatch_error",
                 error_message=str(exc),
             )
+            if self._event_broker is not None:
+                _publish_event_safely(
+                    self._event_broker,
+                    failed.id,
+                    WebTurnEventType.TURN_FAILED,
+                    {
+                        "error_code": failed.error_code,
+                        "error_message": failed.error_message,
+                    },
+                )
         return True
 
 
 class WebTurnCompletionHandler:
     """Persists correlated Web channel responses as completed turns."""
 
-    def __init__(self, repository: TurnRepository) -> None:
+    def __init__(
+        self,
+        repository: TurnRepository,
+        event_broker: WebTurnEventBroker | None = None,
+        event_bridge: "WebTurnEventBridge | None" = None,
+    ) -> None:
         self._repository = repository
+        self._event_broker = event_broker
+        self._event_bridge = event_bridge
 
     def subscribe(self, bus: WebTurnBus) -> None:
         bus.subscribe_outbound(WEB_CHANNEL, self.handle)
@@ -85,4 +113,29 @@ class WebTurnCompletionHandler:
         turn_id = str((message.metadata or {}).get("turn_id") or "").strip()
         if not turn_id:
             return
-        _ = self._repository.mark_done(turn_id, message.content)
+        completed = self._repository.mark_done(turn_id, message.content)
+        if self._event_broker is not None:
+            _publish_event_safely(
+                self._event_broker,
+                completed.id,
+                WebTurnEventType.TURN_COMPLETED,
+                {"answer": completed.answer or ""},
+            )
+        if self._event_bridge is not None:
+            self._event_bridge.forget_turn(completed.id)
+
+
+def _publish_event_safely(
+    broker: WebTurnEventBroker,
+    turn_id: str,
+    event_type: WebTurnEventType,
+    payload: dict[str, object],
+) -> None:
+    try:
+        _ = broker.publish(turn_id, event_type, payload)
+    except RuntimeError:
+        logger.info(
+            "Skipped live Web turn event after broker shutdown: turn_id=%s type=%s",
+            turn_id,
+            event_type.value,
+        )

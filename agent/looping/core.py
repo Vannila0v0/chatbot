@@ -73,8 +73,13 @@ def _is_positive_int(value: str) -> bool:
         return False
 
 
+def _supports_all_chat_ids(_value: str) -> bool:
+    return True
+
+
 _STREAM_SUPPORT_POLICIES: dict[str, StreamSupportPolicy] = {
     "telegram": _is_positive_int,
+    "web": _supports_all_chat_ids,
 }
 
 
@@ -95,6 +100,13 @@ def _item_content(item: InboundItem) -> str:
     if isinstance(item, InboundMessage):
         return item.content
     return f"[后台任务完成] {item.event.label or item.event.status or item.event.job_id}"
+
+
+def _item_turn_id(item: InboundItem) -> str | None:
+    if not isinstance(item, InboundMessage):
+        return None
+    turn_id = str((item.metadata or {}).get("turn_id") or "").strip()
+    return turn_id or None
 
 
 class AgentLoop:
@@ -565,6 +577,7 @@ class AgentLoop:
                 chat_id=msg.chat_id,
                 content=_item_content(msg),
                 timestamp=msg.timestamp,
+                turn_id=_item_turn_id(msg),
             )
         )
 

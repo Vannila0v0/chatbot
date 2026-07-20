@@ -22,7 +22,7 @@ from agent.tools.base import Tool
 from agent.tools.registry import ToolRegistry
 from bus.event_bus import EventBus
 from bus.events import InboundMessage, OutboundMessage
-from bus.events_lifecycle import TurnCommitted
+from bus.events_lifecycle import TurnCommitted, TurnStarted
 from core.memory.engine import MemoryQueryResult
 from bootstrap.wiring import wire_turn_lifecycle
 
@@ -99,6 +99,7 @@ def test_stream_events_only_support_telegram_private_chat():
     assert not _supports_stream_events("telegram", "@alice")
     assert not _supports_stream_events("qq", "123")
     assert not _supports_stream_events("cli", "direct")
+    assert _supports_stream_events("web", "conversation-1")
 
 
 def test_stream_event_sink_respects_suppression_flag():
@@ -113,6 +114,26 @@ def test_stream_event_sink_respects_suppression_flag():
     )
 
     assert AgentLoop._build_stream_event_sink(loop, msg) is None
+
+
+@pytest.mark.asyncio
+async def test_turn_started_propagates_web_turn_id() -> None:
+    loop = object.__new__(AgentLoop)
+    loop._event_bus = EventBus()
+    observed: list[TurnStarted] = []
+    loop._event_bus.on(TurnStarted, lambda event: observed.append(event))
+    msg = InboundMessage(
+        channel="web",
+        sender="user-1",
+        chat_id="conversation-1",
+        content="hello",
+        metadata={"turn_id": "turn-1"},
+    )
+
+    await AgentLoop._observe_turn_started(loop, msg, msg.session_key)
+
+    assert len(observed) == 1
+    assert observed[0].turn_id == "turn-1"
 
 
 @pytest.mark.asyncio

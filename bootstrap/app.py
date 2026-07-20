@@ -21,6 +21,8 @@ from core.net.http import (
 )
 from web.turns.message_bus import WebTurnCompletionHandler, WebTurnDispatcher
 from web.turns.sqlite_repository import SQLiteTurnRepository
+from web.events.broker import WebTurnEventBroker
+from web.events.bridge import WebTurnEventBridge
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,6 +97,8 @@ class AppRuntime:
         self.turn_dispatcher: WebTurnDispatcher | None = None
         self.turn_completion_handler: WebTurnCompletionHandler | None = None
         self.turn_dispatch_task: asyncio.Task[None] | None = None
+        self.turn_event_broker: WebTurnEventBroker | None = None
+        self.turn_event_bridge: WebTurnEventBridge | None = None
         self.tasks: list[Awaitable[None]] = []
         self._memory_optimizer = None
         self._shutdown = False
@@ -128,9 +132,18 @@ class AppRuntime:
             await self.core.start()
 
             self.turn_repository = SQLiteTurnRepository(self.workspace / "web.db")
-            self.turn_dispatcher = WebTurnDispatcher(self.turn_repository, self.bus)
+            self.turn_event_broker = WebTurnEventBroker()
+            self.turn_event_bridge = WebTurnEventBridge(self.turn_event_broker)
+            self.turn_event_bridge.subscribe(event_bus)
+            self.turn_dispatcher = WebTurnDispatcher(
+                self.turn_repository,
+                self.bus,
+                self.turn_event_broker,
+            )
             self.turn_completion_handler = WebTurnCompletionHandler(
-                self.turn_repository
+                self.turn_repository,
+                self.turn_event_broker,
+                self.turn_event_bridge,
             )
             self.turn_completion_handler.subscribe(self.bus)
             self.turn_dispatch_task = asyncio.create_task(
@@ -180,6 +193,7 @@ class AppRuntime:
                 memory_admin=self.memory_runtime.engine,
                 memory_store=self.memory_runtime.markdown.store,
                 turn_repository=self.turn_repository,
+                turn_event_broker=self.turn_event_broker,
             )
             self.dashboard_task = asyncio.create_task(
                 self.dashboard_server.serve(),
@@ -253,6 +267,7 @@ class AppRuntime:
                     "memory_runtime.aclose",
                     self.memory_runtime.aclose if self.memory_runtime else _noop_async,
                 ),
+                ("turn_event_broker.aclose", self._close_turn_event_broker),
                 ("turn_repository.close", self._close_turn_repository),
                 ("http_resources.aclose", self.http_resources.aclose),
             )
@@ -262,6 +277,10 @@ class AppRuntime:
     async def _close_turn_repository(self) -> None:
         if self.turn_repository is not None:
             self.turn_repository.close()
+
+    async def _close_turn_event_broker(self) -> None:
+        if self.turn_event_broker is not None:
+            await self.turn_event_broker.aclose()
 
 
 def build_app_runtime(

@@ -31,6 +31,7 @@ from core.common.timekit import utcnow
 from core.memory.engine import MemoryAdminApi
 from session.store import SessionStore
 from web.api.routes import create_turn_router
+from web.events.broker import WebTurnEventBroker
 from web.turns.repository import TurnRepository
 
 logger = logging.getLogger(__name__)
@@ -737,6 +738,7 @@ def create_dashboard_app(
     memory_admin: MemoryAdminApi,
     memory_store: MemoryStore | None = None,
     turn_repository: TurnRepository | None = None,
+    turn_event_broker: WebTurnEventBroker | None = None,
 ) -> FastAPI:
     workspace.mkdir(parents=True, exist_ok=True)
     store = SessionStore(workspace / "sessions.db")
@@ -779,7 +781,7 @@ def create_dashboard_app(
     app.state.memory_store = memory_store or MemoryStore(workspace)
     app.mount("/assets", StaticFiles(directory=static_dir), name="dashboard-assets")
     if turn_repository is not None:
-        app.include_router(create_turn_router(turn_repository))
+        app.include_router(create_turn_router(turn_repository, turn_event_broker))
 
     # Compile TypeScript plugin panels and mount plugin routes
     if plugins_root.is_dir():
@@ -1399,6 +1401,7 @@ def run_dashboard_api(
     memory_admin: MemoryAdminApi,
     memory_store: MemoryStore | None = None,
     turn_repository: TurnRepository | None = None,
+    turn_event_broker: WebTurnEventBroker | None = None,
 ) -> None:
     server = uvicorn.Server(
         _build_dashboard_uvicorn_config(
@@ -1410,6 +1413,7 @@ def run_dashboard_api(
             memory_admin=memory_admin,
             memory_store=memory_store,
             turn_repository=turn_repository,
+            turn_event_broker=turn_event_broker,
         )
     )
     server.run()
@@ -1425,6 +1429,7 @@ def _build_dashboard_uvicorn_config(
     memory_admin: MemoryAdminApi,
     memory_store: MemoryStore | None = None,
     turn_repository: TurnRepository | None = None,
+    turn_event_broker: WebTurnEventBroker | None = None,
 ) -> uvicorn.Config:
     config = uvicorn.Config(
         create_dashboard_app(
@@ -1434,6 +1439,7 @@ def _build_dashboard_uvicorn_config(
             memory_admin=memory_admin,
             memory_store=memory_store,
             turn_repository=turn_repository,
+            turn_event_broker=turn_event_broker,
         ),
         host=host,
         port=port,
@@ -1453,6 +1459,7 @@ def build_dashboard_server(
     memory_admin: MemoryAdminApi,
     memory_store: MemoryStore | None = None,
     turn_repository: TurnRepository | None = None,
+    turn_event_broker: WebTurnEventBroker | None = None,
 ) -> uvicorn.Server:
     config = _build_dashboard_uvicorn_config(
         workspace=workspace,
@@ -1463,5 +1470,6 @@ def build_dashboard_server(
         memory_admin=memory_admin,
         memory_store=memory_store,
         turn_repository=turn_repository,
+        turn_event_broker=turn_event_broker,
     )
     return uvicorn.Server(config)
