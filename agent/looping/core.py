@@ -381,6 +381,11 @@ class AgentLoop:
                     OutboundMessage(
                         channel=item.channel,
                         chat_id=item.chat_id,
+                        metadata=(
+                            dict(item.metadata or {})
+                            if isinstance(item, InboundMessage)
+                            else {}
+                        ),
                         content=f"出错：{e}",
                     )
                 )
