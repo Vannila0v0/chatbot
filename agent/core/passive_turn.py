@@ -449,6 +449,11 @@ class PassiveTurnPipeline:
         state: TurnState,
         outbound: OutboundMessage,
     ) -> OutboundMessage:
+        outbound.metadata = {
+            **(state.msg.metadata or {}),
+            **state.extra_metadata,
+            **(outbound.metadata or {}),
+        }
         if state.dispatch_outbound:
             _ = await self._outbound_port.dispatch(
                 OutboundDispatch(

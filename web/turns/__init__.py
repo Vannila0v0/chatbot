@@ -1,4 +1,9 @@
 from web.turns.models import Turn, TurnStatus
+from web.turns.message_bus import (
+    WEB_CHANNEL,
+    WebTurnCompletionHandler,
+    WebTurnDispatcher,
+)
 from web.turns.repository import (
     IdempotencyConflictError,
     InvalidTurnTransitionError,
@@ -15,4 +20,7 @@ __all__ = [
     "TurnNotFoundError",
     "TurnRepository",
     "TurnStatus",
+    "WEB_CHANNEL",
+    "WebTurnCompletionHandler",
+    "WebTurnDispatcher",
 ]

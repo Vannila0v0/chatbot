@@ -445,13 +445,21 @@ async def test_reasoner_exception_turn_returns_control_outbound():
             outbound_port=cast(OutboundPort, dispatch_port),
         )
     )
-    msg = InboundMessage(channel="telegram", sender="hua", chat_id="123", content="hi")
+    msg = InboundMessage(
+        channel="telegram",
+        sender="hua",
+        chat_id="123",
+        content="hi",
+        metadata={"turn_id": "turn-1"},
+    )
 
     out = await agent_core.process(msg, "telegram:123", dispatch_outbound=True)
 
     assert out.content == "处理消息时出错，请稍后再试。"
     dispatch_port.dispatch.assert_awaited_once()
     dispatched = dispatch_port.dispatch.await_args.args[0]
+    assert out.metadata["turn_id"] == "turn-1"
+    assert dispatched.metadata["turn_id"] == "turn-1"
     assert dispatched.content == "处理消息时出错，请稍后再试。"
 
 
