@@ -19,6 +19,8 @@ from core.net.http import (
     clear_default_shared_http_resources,
     configure_default_shared_http_resources,
 )
+from web.turns.message_bus import WebTurnCompletionHandler, WebTurnDispatcher
+from web.turns.sqlite_repository import SQLiteTurnRepository
 
 logging.basicConfig(
     level=logging.INFO,
@@ -89,6 +91,10 @@ class AppRuntime:
         self.peer_poller = None
         self.dashboard_server = None
         self.dashboard_task: asyncio.Task[None] | None = None
+        self.turn_repository: SQLiteTurnRepository | None = None
+        self.turn_dispatcher: WebTurnDispatcher | None = None
+        self.turn_completion_handler: WebTurnCompletionHandler | None = None
+        self.turn_dispatch_task: asyncio.Task[None] | None = None
         self.tasks: list[Awaitable[None]] = []
         self._memory_optimizer = None
         self._shutdown = False
@@ -120,6 +126,17 @@ class AppRuntime:
             self.peer_process_manager = self.core.peer_process_manager
             self.peer_poller = self.core.peer_poller
             await self.core.start()
+
+            self.turn_repository = SQLiteTurnRepository(self.workspace / "web.db")
+            self.turn_dispatcher = WebTurnDispatcher(self.turn_repository, self.bus)
+            self.turn_completion_handler = WebTurnCompletionHandler(
+                self.turn_repository
+            )
+            self.turn_completion_handler.subscribe(self.bus)
+            self.turn_dispatch_task = asyncio.create_task(
+                self.turn_dispatcher.run(),
+                name="web_turn_dispatcher",
+            )
 
             plugin_manager = getattr(self.core, "plugin_manager", None)
             (
@@ -162,6 +179,7 @@ class AppRuntime:
                 manual_memory_optimizer=self._memory_optimizer,
                 memory_admin=self.memory_runtime.engine,
                 memory_store=self.memory_runtime.markdown.store,
+                turn_repository=self.turn_repository,
             )
             self.dashboard_task = asyncio.create_task(
                 self.dashboard_server.serve(),
@@ -200,6 +218,14 @@ class AppRuntime:
             return
         self._shutdown = True
         try:
+            if self.turn_dispatcher is not None:
+                self.turn_dispatcher.stop()
+            if self.turn_dispatch_task is not None:
+                _ = self.turn_dispatch_task.cancel()
+                try:
+                    await self.turn_dispatch_task
+                except asyncio.CancelledError:
+                    pass
             if self.dashboard_server is not None:
                 self.dashboard_server.should_exit = True
             if self.dashboard_task is not None:
@@ -227,10 +253,15 @@ class AppRuntime:
                     "memory_runtime.aclose",
                     self.memory_runtime.aclose if self.memory_runtime else _noop_async,
                 ),
+                ("turn_repository.close", self._close_turn_repository),
                 ("http_resources.aclose", self.http_resources.aclose),
             )
         finally:
             clear_default_shared_http_resources(self.http_resources)
+
+    async def _close_turn_repository(self) -> None:
+        if self.turn_repository is not None:
+            self.turn_repository.close()
 
 
 def build_app_runtime(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Protocol
@@ -28,6 +29,18 @@ class WebTurnDispatcher:
     def __init__(self, repository: TurnRepository, bus: WebTurnBus) -> None:
         self._repository = repository
         self._bus = bus
+        self._running = False
+
+    async def run(self, poll_interval_seconds: float = 0.25) -> None:
+        if poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be greater than zero")
+        self._running = True
+        while self._running:
+            if not await self.run_once():
+                await asyncio.sleep(poll_interval_seconds)
+
+    def stop(self) -> None:
+        self._running = False
 
     async def run_once(self) -> bool:
         turn = self._repository.claim_next_pending()

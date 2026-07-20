@@ -176,8 +176,14 @@ async def test_serve_smoke_loads_config_and_runs_shutdown(monkeypatch, tmp_path)
     monkeypatch.setattr(
         bootstrap_app, "build_core_runtime", _patched_build_core_runtime
     )
+    def _build_dashboard_server(**kwargs):
+        observed["turn_repository"] = kwargs["turn_repository"]
+        return _FakeDashboardServer()
+
     monkeypatch.setattr(
-        bootstrap_app, "build_dashboard_server", lambda **_: _FakeDashboardServer()
+        bootstrap_app,
+        "build_dashboard_server",
+        _build_dashboard_server,
     )
     monkeypatch.setattr(main.Path, "home", lambda: tmp_path)
 
@@ -186,6 +192,8 @@ async def test_serve_smoke_loads_config_and_runs_shutdown(monkeypatch, tmp_path)
     assert socket_path.exists() is False
     assert "scheduler" in observed
     assert "bus" in observed
+    assert observed["turn_repository"] is not None
+    assert (tmp_path / ".akashic" / "workspace" / "web.db").exists()
     assert cast(SharedHttpResources, observed["http_resources"]).closed is True
 
 
