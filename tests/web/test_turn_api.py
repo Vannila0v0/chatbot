@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -7,6 +8,8 @@ import pytest
 from fastapi import FastAPI
 
 from web.api.routes import create_turn_router
+from web.events.broker import WebTurnEventBroker
+from web.events.models import WebTurnEventType
 from web.turns.models import TurnStatus
 from web.turns.sqlite_repository import SQLiteTurnRepository
 
@@ -21,9 +24,14 @@ def repository(tmp_path: Path):
 
 
 @pytest.fixture
-def app(repository) -> FastAPI:
+def event_broker() -> WebTurnEventBroker:
+    return WebTurnEventBroker()
+
+
+@pytest.fixture
+def app(repository, event_broker: WebTurnEventBroker) -> FastAPI:
     application = FastAPI()
-    application.include_router(create_turn_router(repository))
+    application.include_router(create_turn_router(repository, event_broker))
     return application
 
 
@@ -164,3 +172,144 @@ async def test_create_turn_rejects_blank_required_fields(
         )
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_sse_streams_queued_live_deltas_and_terminal_event(
+    repository,
+    event_broker: WebTurnEventBroker,
+    transport: httpx.ASGITransport,
+) -> None:
+    turn = repository.create(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        client_request_id="request-1",
+        content="hello",
+    )
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response_task = asyncio.create_task(
+            client.get(f"/api/turns/{turn.id}/events")
+        )
+        for _ in range(100):
+            if event_broker.subscriber_count(turn.id) == 1:
+                break
+            await asyncio.sleep(0.01)
+        event_broker.publish(turn.id, WebTurnEventType.TURN_STARTED)
+        event_broker.publish(
+            turn.id,
+            WebTurnEventType.THINKING_DELTA,
+            {"delta": "thinking"},
+        )
+        event_broker.publish(
+            turn.id,
+            WebTurnEventType.TEXT_DELTA,
+            {"delta": "answer"},
+        )
+        completed = repository.claim_next_pending()
+        assert completed is not None
+        repository.mark_done(turn.id, "answer")
+        event_broker.publish(
+            turn.id,
+            WebTurnEventType.TURN_COMPLETED,
+            {"answer": "answer"},
+        )
+        response = await asyncio.wait_for(response_task, timeout=2)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert "event: turn.queued" in response.text
+    assert "event: turn.started" in response.text
+    assert "event: thinking.delta" in response.text
+    assert "event: text.delta" in response.text
+    assert "event: turn.completed" in response.text
+    assert response.text.index("event: thinking.delta") < response.text.index(
+        "event: text.delta"
+    )
+    assert event_broker.subscriber_count(turn.id) == 0
+
+
+@pytest.mark.asyncio
+async def test_sse_returns_durable_terminal_state_immediately(
+    repository,
+    transport: httpx.ASGITransport,
+) -> None:
+    turn = repository.create(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        client_request_id="request-1",
+        content="hello",
+    )
+    repository.claim_next_pending()
+    repository.mark_done(turn.id, "finished")
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.get(f"/api/turns/{turn.id}/events")
+
+    assert response.status_code == 200
+    assert "event: turn.completed" in response.text
+    assert '"answer":"finished"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_sse_uses_live_snapshot_for_late_subscriber(
+    repository,
+    event_broker: WebTurnEventBroker,
+    transport: httpx.ASGITransport,
+) -> None:
+    turn = repository.create(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        client_request_id="request-1",
+        content="hello",
+    )
+    repository.claim_next_pending()
+    event_broker.publish(turn.id, WebTurnEventType.TURN_STARTED)
+    event_broker.publish(
+        turn.id,
+        WebTurnEventType.THINKING_DELTA,
+        {"delta": "already thinking"},
+    )
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response_task = asyncio.create_task(
+            client.get(f"/api/turns/{turn.id}/events")
+        )
+        for _ in range(100):
+            if event_broker.subscriber_count(turn.id) == 1:
+                break
+            await asyncio.sleep(0.01)
+        repository.mark_done(turn.id, "done")
+        event_broker.publish(
+            turn.id,
+            WebTurnEventType.TURN_COMPLETED,
+            {"answer": "done"},
+        )
+        response = await asyncio.wait_for(response_task, timeout=2)
+
+    assert "event: turn.snapshot" in response.text
+    assert "already thinking" in response.text
+    assert "event: turn.completed" in response.text
+
+
+@pytest.mark.asyncio
+async def test_sse_missing_turn_returns_not_found(
+    transport: httpx.ASGITransport,
+) -> None:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/api/turns/missing/events")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "turn_not_found"
