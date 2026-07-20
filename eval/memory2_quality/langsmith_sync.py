@@ -78,16 +78,22 @@ def _metric_evaluator(run: Any, example: Any):
 
 
 async def run_experiment(
-    *, target: Any, data: Any, experiment_prefix: str, max_concurrency: int
+    *,
+    target: Any,
+    data: Any,
+    experiment_prefix: str,
+    max_concurrency: int,
+    evaluators: list[Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Any:
     return await _aevaluate(
         target,
         data=data,
-        evaluators=[_metric_evaluator],
+        evaluators=evaluators or [_metric_evaluator],
         experiment_prefix=experiment_prefix,
         max_concurrency=max(1, max_concurrency),
         blocking=True,
-        metadata={"benchmark": "memory2-quality"},
+        metadata=metadata or {"benchmark": "memory2-quality"},
     )
 
 
@@ -172,14 +178,31 @@ class LangSmithSink:
                 fields = {
                     "inputs": {
                         "case_id": case.get("case_id"),
+                        "timeline_id": case.get("timeline_id"),
+                        "dataset_split": case.get("dataset_split"),
                         "sessions": case.get("sessions", []),
                         "initial_memories": case.get("initial_memories", []),
                         "recall_probes": case.get("recall_probes", []),
+                        "query": case.get("query"),
+                        "query_time": case.get("query_time"),
+                        "top_k": case.get("top_k"),
+                        "tags": case.get("tags", []),
+                        "preferred_pairs": case.get("preferred_pairs", []),
+                        "preferred_memory_pairs": case.get(
+                            "preferred_memory_pairs", []
+                        ),
                     },
-                    "outputs": {"expected_write": case.get("expected_write", {})},
+                    "outputs": {
+                        "expected_write": case.get("expected_write", {}),
+                        "cluster_oracle": case.get("cluster_oracle", {}),
+                        "memory_oracle": case.get("memory_oracle", {}),
+                    },
                     "metadata": {
                         "category": case.get("category"),
                         "source": case.get("source"),
+                        "review_status": case.get("review_status"),
+                        "timelines_sha256": case.get("timelines_sha256"),
+                        "dataset_sha256": case.get("dataset_sha256"),
                     },
                 }
                 try:

@@ -158,14 +158,14 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return float(va @ vb) / a_norm / b_norm
 
 
-def _hotness_score(
+def _hotness_components(
     reinforcement: int,
     updated_at: datetime,
     now: datetime | None = None,
     half_life_days: float = 14.0,
     emotional_weight: int = 0,
-) -> float:
-    """计算热度分：频度 * 时间衰减，结果在 (0, 1) 区间。"""
+) -> dict[str, float | int]:
+    """返回热度及其中间因子，供排序与诊断共用同一套计算。"""
     if now is None:
         now = datetime.now(timezone.utc)
     if updated_at.tzinfo is None:
@@ -176,10 +176,67 @@ def _hotness_score(
         half_life_days * (1.0 + 0.5 * _coerce_emotional_weight(emotional_weight) / 10.0),
         0.1,
     )
-    freq    = 1.0 / (1.0 + math.exp(-math.log1p(max(0, reinforcement))))
-    age_d   = max((now - updated_at).total_seconds() / 86400.0, 0.0)
+    normalized_reinforcement = max(0, reinforcement)
+    normalized_emotional_weight = _coerce_emotional_weight(emotional_weight)
+    freq = 1.0 / (
+        1.0 + math.exp(-math.log1p(normalized_reinforcement))
+    )
+    age_d = max((now - updated_at).total_seconds() / 86400.0, 0.0)
     recency = math.exp(-math.log(2) / effective_half_life * age_d)
-    return freq * recency
+    hotness = freq * recency
+    return {
+        "reinforcement": normalized_reinforcement,
+        "emotional_weight": normalized_emotional_weight,
+        "age_days": age_d,
+        "base_half_life_days": half_life_days,
+        "effective_half_life_days": effective_half_life,
+        "frequency_factor": freq,
+        "recency_factor": recency,
+        "hotness": hotness,
+    }
+
+
+def _hotness_score(
+    reinforcement: int,
+    updated_at: datetime,
+    now: datetime | None = None,
+    half_life_days: float = 14.0,
+    emotional_weight: int = 0,
+) -> float:
+    """计算热度分：频度 * 时间衰减，结果在 (0, 1) 区间。"""
+    return float(
+        _hotness_components(
+            reinforcement,
+            updated_at,
+            now,
+            half_life_days,
+            emotional_weight,
+        )["hotness"]
+    )
+
+
+def _score_diagnostics(
+    *,
+    semantic: float,
+    hotness_alpha: float,
+    components: dict[str, float | int] | None,
+) -> dict[str, float | int]:
+    """构造评分诊断字段；只描述计算过程，不参与排序。"""
+    hotness = float((components or {}).get("hotness", 0.0))
+    semantic_contribution = (1.0 - hotness_alpha) * semantic
+    hotness_contribution = hotness_alpha * hotness
+    final = semantic_contribution + hotness_contribution
+    details: dict[str, float | int] = {
+        "semantic": semantic,
+        "hotness": hotness,
+        "alpha": hotness_alpha,
+        "semantic_contribution": semantic_contribution,
+        "hotness_contribution": hotness_contribution,
+        "final": final,
+    }
+    if components:
+        details.update(components)
+    return details
 
 
 def _normalize_emb(emb: list[float]) -> list[float]:
@@ -1307,11 +1364,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
             extra["_updated_at"] = updated_at_str
             extra["_emotional_weight"] = emotional_weight_int
 
-            hotness = 0.0
+            hotness_components: dict[str, float | int] | None = None
             if hotness_alpha > 0 and updated_at_str:
                 try:
                     updated_at = datetime.fromisoformat(updated_at_str)
-                    hotness = _hotness_score(
+                    hotness_components = _hotness_components(
                         reinforcement_int,
                         updated_at,
                         now,
@@ -1321,6 +1378,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
                 except (ValueError, TypeError):
                     pass
 
+            hotness = float((hotness_components or {}).get("hotness", 0.0))
             final = (1.0 - hotness_alpha) * similarity + hotness_alpha * hotness
             scored.append(
                 {
@@ -1331,11 +1389,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
                     "happened_at": str(happened_at) if happened_at else "",
                     "source_ref": str(source_ref) if source_ref else "",
                     "score": round(final, 4),
-                    "_score_debug": {
-                        "semantic": round(similarity, 4),
-                        "hotness": round(hotness, 4),
-                        "final": round(final, 4),
-                    },
+                    "_score_debug": _score_diagnostics(
+                        semantic=similarity,
+                        hotness_alpha=hotness_alpha,
+                        components=hotness_components,
+                    ),
                 }
             )
 
@@ -1421,7 +1479,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
             if semantic < score_threshold:
                 continue
 
-            hotness = 0.0
+            hotness_components: dict[str, float | int] | None = None
             if hotness_alpha > 0:
                 reinforcement = _coerce_int(extra.get("_reinforcement"), 1)
                 updated_at_raw = extra.get("_updated_at")
@@ -1432,7 +1490,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
                 if updated_at_str:
                     try:
                         updated_at = datetime.fromisoformat(updated_at_str)
-                        hotness = _hotness_score(
+                        hotness_components = _hotness_components(
                             reinforcement,
                             updated_at,
                             now,
@@ -1442,6 +1500,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
                     except (ValueError, TypeError):
                         pass
 
+            hotness = float((hotness_components or {}).get("hotness", 0.0))
             final = (1.0 - hotness_alpha) * semantic + hotness_alpha * hotness
 
             scored.append(
@@ -1453,11 +1512,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
                     "happened_at": happened_at or "",
                     "source_ref": source_ref or "",
                     "score": round(final, 4),
-                    "_score_debug": {
-                        "semantic": round(semantic, 4),
-                        "hotness": round(hotness, 4),
-                        "final": round(final, 4),
-                    },
+                    "_score_debug": _score_diagnostics(
+                        semantic=semantic,
+                        hotness_alpha=hotness_alpha,
+                        components=hotness_components,
+                    ),
                 }
             )
 

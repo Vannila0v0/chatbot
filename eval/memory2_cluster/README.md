@@ -1,0 +1,139 @@
+# Memory2 事件簇召回评测
+
+该评测直接预置经过脱敏的历史事件记忆，只检查检索能否覆盖多个相关事件簇。`cluster_id` 仅用于评分，不会提供给检索系统。
+
+开发集运行：
+
+```powershell
+python -m eval.memory2_cluster.run `
+  --config config.toml `
+  --timelines eval/memory2_cluster/datasets/timelines.jsonl `
+  --dataset eval/memory2_cluster/datasets/dev.jsonl `
+  --workers 2 `
+  --langsmith `
+  --experiment-prefix memory2-cluster-dev-v1
+```
+
+评测指标包括核心簇召回率、加权簇覆盖率、Cluster MRR、无关簇比例、禁止簇命中率、重复簇比例和上下文预算效率。`test.jsonl` 是冻结候选，不应在根据开发集调整检索策略前运行。
+
+## 热度公式配对 A/B
+
+该实验专门比较两条排序链路，除热度参数外保持候选记忆、query embedding、关键词结果和 RRF 逻辑一致：
+
+- Baseline：`hotness_alpha=0`，即语义相似度与关键词排名做 RRF。
+- Treatment：`hotness_alpha=0.2`，先将 reinforcement 与时间衰减形成的热度和语义分数混合，再与同一份关键词排名做 RRF。
+
+数据分开报告，不能把两者混成一个平均分：
+
+- `natural_dev.jsonl`：先冻结整段脱敏日常时间线，再从时间线中派生 query，用于观察自然分布表现。
+- `challenge_dev.jsonl`：诊断集，其中 benefit 案例验证公式应当生效的场景，guardrail 案例检查旧但重要事实被错误遗忘、高频噪音压过稳定事实等副作用。
+- `natural_test.jsonl`：冻结测试候选，在参数和规则定稿前不要运行。
+
+运行自然开发集：
+
+```powershell
+python -m eval.memory2_cluster.compare `
+  --config config.toml `
+  --timelines eval/memory2_cluster/datasets/natural_timelines.jsonl `
+  --dataset eval/memory2_cluster/datasets/natural_dev.jsonl `
+  --workers 2 `
+  --langsmith `
+  --experiment-prefix memory2-hotness-natural-dev-v1
+```
+
+运行挑战开发集：
+
+```powershell
+python -m eval.memory2_cluster.compare `
+  --config config.toml `
+  --timelines eval/memory2_cluster/datasets/challenge_timelines.jsonl `
+  --dataset eval/memory2_cluster/datasets/challenge_dev.jsonl `
+  --workers 2 `
+  --langsmith `
+  --experiment-prefix memory2-hotness-challenge-dev-v1
+```
+
+报告同时给出 weighted cluster coverage、core recall、MRR、nDCG@K、偏好簇 pairwise accuracy、forbidden rate 和 irrelevant rate。单案例的“改善/退化”使用方向一致的 Pareto 判定：所有变化中只有改善则记为改善，只有变差则记为退化，同时存在好坏变化则单列为 mixed，避免用任意加权总分掩盖风险。
+
+### LangSmith 排名诊断
+
+A/B Trace 中会记录 `seed_ablation_memories`（预置冻结记忆）、`prepare_fixed_query`（准备固定 query）、`rank_baseline`（基线排序）、`rank_treatment`（热度排序）和 `analyze_rank_changes`（分析两组排名变化）五个子 Run。最后一个子 Run 会检查候选集合、语义分和关键词排名是否一致，并列出 Top-K 进出、记忆升降和偏好顺序变化。
+
+`include_score_diagnostics` 是项目自定义参数，中文含义是“是否把评分计算明细附加到 RRF 返回结果”。默认值为 `False`，生产调用只返回正常结果；评测设为 `True` 时额外记录向量排名、关键词排名及两侧 RRF 贡献。该参数只允许增加诊断字段，不得改变排序、分数或截断数量。
+
+候选诊断包含语义分、reinforcement、记忆年龄、频度因子、时间衰减因子、情绪权重影响后的有效半衰期、热度分、两部分加权贡献和最终 RRF 排名。原始 embedding、API key、本地路径和 source_ref 不上传；query embedding 只记录 SHA-256 指纹。
+
+## 从本地消息库抽取候选时间线
+
+`extract_candidates` 使用 SQLite 只读模式，按照本地 windows JSON 中预先确定的互不重叠时间窗口，完整保留窗口内的用户消息、助手回复和主动推送。它只生成尚未标注的候选时间线，不会自动生成 query 或 oracle。
+
+```powershell
+python -m eval.memory2_cluster.extract_candidates `
+  --db .akashic-workspace/sessions.db `
+  --windows .akashic-workspace/eval_candidates/candidate_windows.json `
+  --replacements .akashic-workspace/eval_candidates/entity_replacements.json `
+  --output .akashic-workspace/eval_candidates/natural_candidate_timelines.jsonl
+```
+
+凭据、长数字账号、账号句柄、URL、邮箱和本地路径使用通用规则脱敏；个人经历中的机构名称等语义实体通过本地 replacements JSON 处理。windows、replacements 和抽取后的原始候选均应保留在被 Git 忽略的工作空间内。人工复核并进一步抽象后的合成记忆、cluster oracle 和 query 才能进入公开数据集。
+
+候选时间线冻结后，可以生成仅供人工审核的记忆和事件簇草稿：
+
+```powershell
+python -m eval.memory2_cluster.draft_clusters `
+  --config config.toml `
+  --input .akashic-workspace/eval_candidates/natural_candidate_timelines.jsonl `
+  --output .akashic-workspace/eval_candidates/memory_cluster_drafts.jsonl `
+  --review-output .akashic-workspace/eval_candidates/memory_cluster_review.md `
+  --workers 2
+```
+
+生成器不会创建 query 或 oracle。每条记忆必须通过真实 `source_ref` 校验，memory 与 cluster 必须双向一致；失败任务会记录错误，同时保留已经成功的结果，重新运行时支持断点续跑。审核表会优先列出低置信度和 assistant-only 记忆，人工确认后才能进入下一阶段。
+
+人工确认后，先机械计算 reinforcement 和最后使用时间并冻结记忆，再从冻结版本派生 query：
+
+```powershell
+python -m eval.memory2_cluster.freeze_drafts `
+  --source .akashic-workspace/eval_candidates/natural_candidate_timelines.jsonl `
+  --drafts .akashic-workspace/eval_candidates/memory_cluster_drafts.jsonl `
+  --output .akashic-workspace/eval_candidates/frozen_memory_timelines.jsonl
+
+python -m eval.memory2_cluster.derive_queries `
+  --config config.toml `
+  --timelines .akashic-workspace/eval_candidates/frozen_memory_timelines.jsonl `
+  --output .akashic-workspace/eval_candidates/derived_query_candidates.jsonl `
+  --review-output .akashic-workspace/eval_candidates/derived_query_review.md `
+  --workers 2
+```
+
+默认每条时间线派生 4 个 query，并按完整时间线顺序切成 60% dev、20% validation、20% test。同一时间线不会跨集合。每个 query 必须标注时间线里的全部 cluster 和 memory；簇级 oracle 衡量相关事件覆盖，memory oracle 用于区分同一簇中的当前状态和过期状态。方向冲突、自比较或引用不存在对象的 preferred pair 会被机械移除。派生后仍需审核 query 和 oracle，冻结测试集不能用于调整参数。
+
+人工确认全部 query 后，保留 candidate 文件并另行生成批准版本：
+
+```powershell
+python -m eval.memory2_cluster.approve_queries `
+  --input .akashic-workspace/eval_candidates/derived_query_candidates.jsonl `
+  --output .akashic-workspace/eval_candidates/approved_queries.jsonl `
+  --manifest .akashic-workspace/eval_candidates/freeze_manifest.json `
+  --approval-note "人工确认全部 query 通过"
+```
+
+批准步骤只把 `review_status` 改成 `approved`，不会修改 query、oracle 或数据划分，并将批准文件的 SHA-256 写入冻结清单。后续实验必须读取 `approved_queries.jsonl`。
+
+正式运行前先做 Dev dry-run。它只校验数据划分、审批状态、冻结文件哈希和运行参数，不会初始化记忆运行时、调用模型、生成 embedding 或上传 LangSmith：
+
+```powershell
+python -m eval.memory2_cluster.compare `
+  --config config.toml `
+  --timelines .akashic-workspace/eval_candidates/frozen_memory_timelines.jsonl `
+  --dataset .akashic-workspace/eval_candidates/approved_queries.jsonl `
+  --dataset-split dev `
+  --require-approved `
+  --dry-run `
+  --workers 2 `
+  --treatment-alpha 0.2 `
+  --half-life-days 14 `
+  --output .akashic-workspace/eval_candidates/dev_dry_run
+```
+
+确认 `dry-run.json` 中只有 Dev case、状态均为 `approved` 且两个 SHA-256 与冻结清单一致后，移除 `--dry-run` 才会执行真实 A/B。需要同步 LangSmith 时再显式添加 `--langsmith`；Validation/Test 不应在调参阶段运行。

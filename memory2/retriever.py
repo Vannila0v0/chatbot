@@ -523,7 +523,13 @@ def _rrf_merge(
     *,
     top_n: int,
     k: int = _RRF_K,
+    include_score_diagnostics: bool = False,
 ) -> list[dict]:
+    """合并向量与关键词排名。
+
+    include_score_diagnostics 中文含义是“是否附加评分诊断信息”。默认关闭；
+    开启后只增加各排名来源的 RRF 贡献字段，不改变排序或截断规则。
+    """
     vec_rank: dict[str, int] = {}
     for index, item in enumerate(sorted(vector_items, key=_hit_score, reverse=True)):
         item_id = _hit_id(item)
@@ -549,20 +555,47 @@ def _rrf_merge(
         if item_id:
             id_to_item[item_id] = item
 
-    scored: list[tuple[str, float, float]] = []
+    scored: list[tuple[str, float, float, float, float]] = []
     for item_id in set(vec_rank) | set(keyword_rank):
-        rrf_score = 0.0
+        vector_contribution = 0.0
+        keyword_contribution = 0.0
         if item_id in vec_rank:
-            rrf_score += 1.0 / (k + vec_rank[item_id])
+            vector_contribution = 1.0 / (k + vec_rank[item_id])
         if item_id in keyword_rank:
-            rrf_score += _KEYWORD_RRF_WEIGHT / (k + keyword_rank[item_id])
-        scored.append((item_id, rrf_score, _hit_score(id_to_item.get(item_id, {}))))
+            keyword_contribution = _KEYWORD_RRF_WEIGHT / (k + keyword_rank[item_id])
+        rrf_score = vector_contribution + keyword_contribution
+        scored.append(
+            (
+                item_id,
+                rrf_score,
+                _hit_score(id_to_item.get(item_id, {})),
+                vector_contribution,
+                keyword_contribution,
+            )
+        )
 
     scored.sort(key=lambda item: (item[1], item[2]), reverse=True)
     result: list[dict] = []
-    for item_id, rrf_score, _score in scored[:top_n]:
+    for final_rank, (
+        item_id,
+        rrf_score,
+        _score,
+        vector_contribution,
+        keyword_contribution,
+    ) in enumerate(scored[:top_n], 1):
         item = dict(id_to_item[item_id])
         item["rrf_score"] = rrf_score
+        if include_score_diagnostics:
+            item["_rrf_debug"] = {
+                "rrf_k": k,
+                "keyword_rrf_weight": _KEYWORD_RRF_WEIGHT,
+                "vector_rank": vec_rank.get(item_id),
+                "keyword_rank": keyword_rank.get(item_id),
+                "vector_contribution": vector_contribution,
+                "keyword_contribution": keyword_contribution,
+                "rrf_score": rrf_score,
+                "final_rank": final_rank,
+            }
         result.append(item)
     return result
 
