@@ -30,6 +30,7 @@ from proactive_v2.state import ProactiveStateStore
 from core.common.timekit import utcnow
 from core.memory.engine import MemoryAdminApi
 from session.store import SessionStore
+from web.api.chat import mount_chat_ui
 from web.api.routes import create_turn_router
 from web.events.broker import WebTurnEventBroker
 from web.turns.repository import TurnRepository
@@ -750,6 +751,7 @@ def create_dashboard_app(
     project_root = Path(__file__).resolve().parent.parent
     plugins_root = project_root / "plugins"
     static_dir = project_root / "static" / "dashboard"
+    chat_static_dir = project_root / "static" / "chat"
 
     def get_proactive_reader() -> ProactiveDashboardReader:
         nonlocal proactive_reader
@@ -780,6 +782,7 @@ def create_dashboard_app(
     app.state.memory_admin = memory_admin
     app.state.memory_store = memory_store or MemoryStore(workspace)
     app.mount("/assets", StaticFiles(directory=static_dir), name="dashboard-assets")
+    mount_chat_ui(app, chat_static_dir)
     if turn_repository is not None:
         app.include_router(create_turn_router(turn_repository, turn_event_broker))
 

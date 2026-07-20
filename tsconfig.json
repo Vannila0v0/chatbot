@@ -15,5 +15,5 @@
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["frontend/dashboard/src/**/*.ts", "frontend/dashboard/src/**/*.tsx", "plugins/**/*.ts", "types/**/*.d.ts"]
+  "include": ["frontend/dashboard/src/**/*.ts", "frontend/dashboard/src/**/*.tsx", "frontend/chat/src/**/*.ts", "frontend/chat/src/**/*.tsx", "plugins/**/*.ts", "types/**/*.d.ts"]
 }
