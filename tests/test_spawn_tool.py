@@ -23,7 +23,11 @@ async def test_spawn_tool_uses_registry_context():
     registry = ToolRegistry()
     manager = _make_manager()
     tool = SpawnTool(manager, registry)
-    registry.set_context(channel="telegram", chat_id="123")
+    registry.set_context(
+        session_key="companion:primary",
+        channel="telegram",
+        chat_id="123",
+    )
 
     result = await tool.execute(task="do work", label="job", run_in_background=True)
 
@@ -33,6 +37,7 @@ async def test_spawn_tool_uses_registry_context():
         label="job",
         origin_channel="telegram",
         origin_chat_id="123",
+        origin_session_key="companion:primary",
         decision=SpawnDecision(
             should_spawn=True,
             label="job",

@@ -43,6 +43,7 @@ class MemorizeTool(Tool):
         steps: list[str] | None = None,
         metadata: dict[str, object] | None = None,
         current_user_source_ref: str | None = None,
+        session_key: str | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
         **extra_kwargs: Any,
@@ -61,7 +62,8 @@ class MemorizeTool(Tool):
                 memory_kind=kind,
                 source_ref=str(current_user_source_ref or "").strip(),
                 scope=MemoryScope(
-                    session_key=f"{channel}:{chat_id}" if channel and chat_id else "",
+                    session_key=(session_key or "").strip()
+                    or (f"{channel}:{chat_id}" if channel and chat_id else ""),
                     channel=channel or "",
                     chat_id=chat_id or "",
                 ),

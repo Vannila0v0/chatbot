@@ -89,6 +89,7 @@ async def test_subagent_manager_announces_completion_to_origin_session(tmp_path)
         label="research",
         origin_channel="telegram",
         origin_chat_id="42",
+        origin_session_key="companion:primary",
         decision=SpawnDecision(
             should_spawn=True,
             label="research",
@@ -105,6 +106,7 @@ async def test_subagent_manager_announces_completion_to_origin_session(tmp_path)
     assert isinstance(item, SpawnCompletionItem)
     assert item.channel == "telegram"
     assert item.chat_id == "42"
+    assert item.session_key == "companion:primary"
     assert item.event.status == "incomplete"
     assert item.event.exit_reason == "forced_summary"
     assert item.decision is not None

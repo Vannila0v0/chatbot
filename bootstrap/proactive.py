@@ -60,6 +60,10 @@ def build_proactive_runtime(
     # 2. 先准备 proactive 独立状态存储和配置快照。
     proactive_state = ProactiveStateStore(workspace / "proactive.db")
     proactive_cfg = config.proactive
+    session_cfg = getattr(config, "session", None)
+    logical_session_key = str(
+        getattr(session_cfg, "primary_key", "") or ""
+    ).strip()
     proactive_provider = _build_proactive_provider(config, provider)
 
     # 3. 构建 ProactiveLoop。
@@ -82,6 +86,7 @@ def build_proactive_runtime(
         ),
         shared_tools=getattr(agent_loop, "tools", None),
         tool_hooks=tool_hooks,
+        logical_session_key=logical_session_key,
     )
 
     # 4. 主动链路本体以后台任务方式常驻运行。

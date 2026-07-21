@@ -28,11 +28,12 @@ class InboundMessage:
     timestamp: datetime = field(default_factory=datetime.now)
     media: list[str] = field(default_factory=_empty_media)
     metadata: dict[str, Any] = field(default_factory=_empty_metadata)
+    logical_session_key: str = ""
 
     @property
     def session_key(self) -> str:
         """唯一会话标识，用于维护对话历史"""
-        return f"{self.channel}:{self.chat_id}"
+        return self.logical_session_key.strip() or f"{self.channel}:{self.chat_id}"
 
 
 @dataclass
@@ -57,10 +58,11 @@ class SpawnCompletionItem:
     event: "SpawnCompletionEvent"
     decision: "SpawnDecision | None" = None
     timestamp: datetime = field(default_factory=datetime.now)
+    logical_session_key: str = ""
 
     @property
     def session_key(self) -> str:
-        return f"{self.channel}:{self.chat_id}"
+        return self.logical_session_key.strip() or f"{self.channel}:{self.chat_id}"
 
 
 InboundItem = InboundMessage | SpawnCompletionItem

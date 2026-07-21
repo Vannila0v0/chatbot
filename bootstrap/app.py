@@ -135,10 +135,15 @@ class AppRuntime:
             self.turn_event_broker = WebTurnEventBroker()
             self.turn_event_bridge = WebTurnEventBridge(self.turn_event_broker)
             self.turn_event_bridge.subscribe(event_bus)
+            session_cfg = getattr(self.config, "session", None)
+            logical_session_key = str(
+                getattr(session_cfg, "primary_key", "") or ""
+            ).strip()
             self.turn_dispatcher = WebTurnDispatcher(
                 self.turn_repository,
                 self.bus,
                 self.turn_event_broker,
+                logical_session_key=logical_session_key,
             )
             self.turn_completion_handler = WebTurnCompletionHandler(
                 self.turn_repository,

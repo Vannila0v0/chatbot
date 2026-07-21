@@ -25,6 +25,7 @@ from agent.config_models import (
     QQBotGroupConfig,
     QQChannelConfig,
     QQGroupConfig,
+    SessionConfig,
     TelegramChannelConfig,
     WiringConfig,
 )
@@ -90,6 +91,7 @@ def load_config(path: str | Path = "config.toml") -> Config:
     peer_agents = _load_peer_agents_config(data)
     fitbit = _load_fitbit_config(data)
     wiring = _load_wiring_config(data)
+    session = _load_session_config(data)
 
     return Config(
         provider=provider,
@@ -159,6 +161,7 @@ def load_config(path: str | Path = "config.toml") -> Config:
         vl_base_url=str(llm_vl.get("base_url") or data.get("vl_base_url", "")),
         peer_agents=peer_agents,
         wiring=wiring,
+        session=session,
     )
 
 
@@ -354,6 +357,14 @@ def _load_wiring_config(data: dict) -> WiringConfig:
     )
 
 
+def _load_session_config(data: dict) -> SessionConfig:
+    raw = _as_dict(data.get("session"))
+    primary_key = str(raw.get("primary_key", "companion:primary") or "").strip()
+    if not primary_key:
+        raise ValueError("session.primary_key must not be blank")
+    return SessionConfig(primary_key=primary_key)
+
+
 def _load_extra_body(data: dict) -> dict:
     llm = _as_dict(data.get("llm"))
     llm_main = _as_dict(llm.get("main"))
@@ -412,6 +423,7 @@ __all__ = [
     "MemoryEmbeddingConfig",
     "QQChannelConfig",
     "QQGroupConfig",
+    "SessionConfig",
     "TelegramChannelConfig",
     "_validated_timezone",
     "load_config",

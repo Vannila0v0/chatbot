@@ -78,6 +78,20 @@ def test_sensor_reads_long_term_from_facade():
     assert sensor.read_memory_text() == "MEMORY"
 
 
+def test_sensor_prefers_canonical_session_over_delivery_route():
+    sensor = Sensor(
+        cfg=SimpleNamespace(default_channel="telegram", default_chat_id="1"),
+        sessions=cast(Any, SimpleNamespace()),
+        state=cast(Any, SimpleNamespace()),
+        memory=None,
+        presence=None,
+        rng=SimpleNamespace(),
+        logical_session_key="companion:primary",
+    )
+
+    assert sensor.target_session_key() == "companion:primary"
+
+
 def test_agent_tick_prompt_keeps_self_block_with_facade():
     tick = ProactiveTurnPipeline(
         ProactiveTurnPipelineDeps(
