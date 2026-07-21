@@ -81,13 +81,11 @@ class TelegramChannel:
         event_bus: EventBus | None = None,
         interrupt_controller: InterruptController | None = None,
         channel_name: str = _CHANNEL,
-        logical_session_key: str = "",
     ) -> None:
         self._bus = bus
         self._session_manager = session_manager
         self._interrupt_controller = interrupt_controller
         self._channel = channel_name
-        self._logical_session_key = logical_session_key.strip()
         self._allow_from: set[str] = set(allow_from) if allow_from else set()
         self._message_deduper = MessageDeduper(_SEEN_MSG_MAXSIZE)
         ws = getattr(session_manager, "workspace", None)
@@ -97,7 +95,6 @@ class TelegramChannel:
             channel=channel_name,
             metadata_key="username",
             normalizer=lambda value: value.lower(),
-            logical_session_key=self._logical_session_key,
         )
         self._app = Application.builder().token(token).build()
         self._bot_commands = bot_commands or []
@@ -140,9 +137,6 @@ class TelegramChannel:
     @property
     def bot(self):
         return self._app.bot
-
-    def _session_key(self, chat_id: str | int) -> str:
-        return self._logical_session_key or f"{self._channel}:{chat_id}"
 
     def _start_live_task(
         self,
@@ -319,7 +313,6 @@ class TelegramChannel:
                     "username": user.username or "",
                     **reply_meta,
                 },
-                logical_session_key=self._logical_session_key,
             )
         )
 
@@ -346,7 +339,7 @@ class TelegramChannel:
             )
             return
 
-        session_key = self._session_key(chat.id)
+        session_key = f"{self._channel}:{chat.id}"
         result = self._interrupt_controller.request_interrupt(
             session_key=session_key,
             sender=str(user.id),
@@ -381,7 +374,6 @@ class TelegramChannel:
                 chat_id=str(chat.id),
                 content=str(getattr(msg, "text", "") or ""),
                 metadata={"username": user.username or ""},
-                logical_session_key=self._logical_session_key,
             )
         )
 
@@ -452,7 +444,6 @@ class TelegramChannel:
                     "username": user.username or "",
                     **reply_meta,
                 },
-                logical_session_key=self._logical_session_key,
             )
         )
 
@@ -508,7 +499,6 @@ class TelegramChannel:
                     "document_mime_type": doc.mime_type or "",
                     **reply_meta,
                 },
-                logical_session_key=self._logical_session_key,
             )
         )
 
@@ -776,7 +766,7 @@ class TelegramChannel:
         preview = msg.content[:60] + "..." if len(msg.content) > 60 else msg.content
         logger.info(f"[telegram] 发送回复  chat_id={msg.chat_id}  内容: {preview!r}")
         cid = int(self._resolve_chat_id(msg.chat_id))
-        session_key = self._session_key(msg.chat_id)
+        session_key = f"{self._channel}:{msg.chat_id}"
         had_live = self._has_live_messages(session_key)
         if had_live:
             await self._cancel_live_tasks(session_key)

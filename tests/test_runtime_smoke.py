@@ -139,33 +139,6 @@ system_prompt = "test"
 
     assert cfg.memory_window == 40
     assert cfg.memory_optimizer_interval_seconds == 64800
-    assert cfg.session.primary_key == "companion:primary"
-
-
-def test_load_config_accepts_custom_primary_session_key(tmp_path: Path):
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        """
-[llm]
-provider = "openai"
-
-[llm.main]
-model = "test-model"
-api_key = "test-key"
-
-[agent]
-system_prompt = "test"
-
-[session]
-primary_key = "companion:custom"
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-
-    cfg = load_config(config_path)
-
-    assert cfg.session.primary_key == "companion:custom"
 
 
 @pytest.mark.asyncio
@@ -470,7 +443,6 @@ async def test_start_channels_wires_telegram_and_qq(monkeypatch, tmp_path):
     ]
     assert tg.kwargs["event_bus"] is event_bus
     assert tg.kwargs["interrupt_controller"] is controller
-    assert tg.kwargs["logical_session_key"] == "companion:primary"
     assert qq.kwargs["interrupt_controller"] is controller
     assert qqbot.kwargs["event_bus"] is event_bus
     assert qqbot.kwargs["interrupt_controller"] is controller

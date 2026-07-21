@@ -555,7 +555,6 @@ class AgentLoop:
             timestamp=msg.timestamp,
             media=msg.media,
             metadata={**(msg.metadata or {}), "resumed_from_interrupt": True},
-            logical_session_key=msg.logical_session_key,
         )
         logger.info(f"Resuming interrupted turn for {key}")
         self._active_turn_states[key] = TurnInterruptState(

@@ -564,8 +564,8 @@ async def test_cli_tui_paths(monkeypatch: pytest.MonkeyPatch):
 async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     mod = _import_telegram_channel(monkeypatch)
     bus = _Bus()
-    session_manager = _SessionManager()
     event_bus = EventBus()
+    session_manager = _SessionManager()
     interrupt_controller = MagicMock()
     interrupt_controller.request_interrupt.return_value = SimpleNamespace(
         status="interrupted",
@@ -934,50 +934,6 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
         SimpleNamespace(text="", caption="", photo=[1], from_user=None, message_id=11),
     )
     assert "[图片]" in merged
-
-
-@pytest.mark.asyncio
-async def test_telegram_channel_uses_canonical_session_for_messages_and_stop(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    mod = _import_telegram_channel(monkeypatch)
-    bus = _Bus()
-    session_manager = _SessionManager()
-    interrupt_controller = MagicMock()
-    interrupt_controller.request_interrupt.return_value = SimpleNamespace(
-        message="stopped"
-    )
-    channel = mod.TelegramChannel(
-        "token",
-        bus,
-        session_manager,
-        allow_from=["1"],
-        interrupt_controller=interrupt_controller,
-        logical_session_key="companion:primary",
-    )
-    monkeypatch.setattr(mod, "send_markdown", AsyncMock())
-    update = SimpleNamespace(
-        effective_message=SimpleNamespace(text="/memorystatus", message_id=1),
-        effective_chat=SimpleNamespace(id=123),
-        effective_user=SimpleNamespace(id=1, username="Alice"),
-    )
-
-    await channel._on_command(update, SimpleNamespace(bot=channel._app.bot))
-    await channel._remember_username("123", "Alice")
-    await channel._on_stop_command(update, SimpleNamespace(bot=channel._app.bot))
-
-    assert bus.inbound[0].chat_id == "123"
-    assert bus.inbound[0].session_key == "companion:primary"
-    assert set(session_manager.sessions) == {"companion:primary"}
-    assert session_manager.sessions["companion:primary"].metadata == {
-        "username": "alice",
-        "telegram_chat_id": "123",
-    }
-    interrupt_controller.request_interrupt.assert_called_once_with(
-        session_key="companion:primary",
-        sender="1",
-        command="/stop",
-    )
 
 
 @pytest.mark.asyncio
