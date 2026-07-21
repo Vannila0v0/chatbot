@@ -154,6 +154,84 @@ def test_default_reasoner_blocks_disabled_tool_even_if_model_calls_it():
     assert calls[0]["status"] == "blocked"
 
 
+def test_default_reasoner_allowed_tools_hide_and_block_other_tools():
+    provider = _Provider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall("c1", "private_mcp", {})],
+            ),
+            LLMResponse(content="final", tool_calls=[]),
+        ]
+    )
+    safe = _DummyTool("web_search")
+    private = _DummyTool("private_mcp")
+    tools = ToolRegistry()
+    tools.register(safe, always_on=True, risk="read-only")
+    tools.register(private, always_on=True, risk="read-only")
+    reasoner = DefaultReasoner(
+        llm=cast(Any, LLMServices(provider=cast(Any, provider), light_provider=cast(Any, provider))),
+        llm_config=LLMConfig(model="m", max_iterations=4, max_tokens=512),
+        tools=tools,
+        discovery=ToolDiscoveryState(),
+        tool_search_enabled=False,
+        memory_window=40,
+    )
+
+    result = asyncio.run(
+        reasoner.run(
+            [{"role": "user", "content": "test"}],
+            allowed_tools={"web_search"},
+        )
+    )
+
+    first_tool_names = [
+        schema["function"]["name"] for schema in provider.calls[0]["tools"]
+    ]
+    assert first_tool_names == ["web_search"]
+    assert private.calls == []
+    assert result.reply == "final"
+    assert result.metadata["tool_chain"][0]["calls"][0]["status"] == "blocked"
+
+
+def test_default_reasoner_tool_search_cannot_escape_allowed_tools():
+    provider = _Provider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall("s1", "tool_search", {"query": "select:private_mcp"})
+                ],
+            ),
+            LLMResponse(content="final", tool_calls=[]),
+        ]
+    )
+    private = _DummyTool("private_mcp")
+    tools = ToolRegistry()
+    tools.register(ToolSearchTool(tools), always_on=True, risk="read-only")
+    tools.register(private, risk="read-only")
+    reasoner = DefaultReasoner(
+        llm=cast(Any, LLMServices(provider=cast(Any, provider), light_provider=cast(Any, provider))),
+        llm_config=LLMConfig(model="m", max_iterations=4, max_tokens=512),
+        tools=tools,
+        discovery=ToolDiscoveryState(),
+        tool_search_enabled=True,
+        memory_window=40,
+    )
+
+    result = asyncio.run(
+        reasoner.run(
+            [{"role": "user", "content": "find private tool"}],
+            allowed_tools={"tool_search"},
+        )
+    )
+
+    assert private.calls == []
+    assert "private_mcp" not in result.metadata["visible_names"]
+    search_result = result.metadata["tool_chain"][0]["calls"][0]["result"]
+    assert "private_mcp" not in json.loads(search_result)["unlocked"]
+
+
 def test_default_reasoner_tool_search_cannot_reunlock_disabled_tool():
     provider = _Provider(
         [

@@ -1,4 +1,5 @@
 import json
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from agent.tools.base import Tool
@@ -16,16 +17,19 @@ class ToolSearchTool(Tool):
 
     def __init__(self, registry: "ToolRegistry") -> None:
         self._registry = registry
-        self._excluded_names: set[str] | None = None
+        self._excluded_names: ContextVar[frozenset[str] | None] = ContextVar(
+            f"tool_search_excluded_names_{id(self)}",
+            default=None,
+        )
 
     def set_excluded_names(self, names: set[str] | None) -> None:
         """Explicitly set which tool names are already visible to the LLM.
 
         Called by the Reasoner before dispatching each tool_search call.
-        Replaces the ContextVar mechanism (_excluded_names_ctx) which is now
-        kept only as a fallback for callers that have not yet migrated.
+        The ContextVar keeps this per async turn even though the ToolRegistry
+        and ToolSearchTool instance are shared by all channels.
         """
-        self._excluded_names = names
+        self._excluded_names.set(frozenset(names) if names is not None else None)
 
     @property
     def name(self) -> str:
@@ -85,8 +89,8 @@ class ToolSearchTool(Tool):
         **_: Any,
     ) -> str:
         # Consume-once: Reasoner calls set_excluded_names() before each dispatch.
-        excluded_names = self._excluded_names
-        self._excluded_names = None
+        excluded_names = self._excluded_names.get()
+        self._excluded_names.set(None)
 
         query = (query or "").strip()
         if not query:

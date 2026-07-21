@@ -9,6 +9,7 @@ from bus.events import InboundItem, InboundMessage, OutboundMessage
 from web.turns.repository import TurnRepository
 from web.events.broker import WebTurnEventBroker
 from web.events.models import WebTurnEventType
+from web.tool_policy import WebToolPolicy
 
 if TYPE_CHECKING:
     from web.events.bridge import WebTurnEventBridge
@@ -41,10 +42,12 @@ class WebTurnDispatcher:
         repository: TurnRepository,
         bus: WebTurnBus,
         event_broker: WebTurnEventBroker | None = None,
+        tool_policy: WebToolPolicy | None = None,
     ) -> None:
         self._repository = repository
         self._bus = bus
         self._event_broker = event_broker
+        self._tool_policy = tool_policy or WebToolPolicy()
         self._running = False
 
     async def run(self, poll_interval_seconds: float = 0.25) -> None:
@@ -73,6 +76,7 @@ class WebTurnDispatcher:
                 "turn_id": turn.id,
                 "user_id": turn.user_id,
                 "client_request_id": turn.client_request_id,
+                **self._tool_policy.as_message_metadata(),
             },
         )
         try:

@@ -23,6 +23,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import pytest
@@ -117,6 +118,34 @@ async def test_tool_search_select_not_excluded_returns_match():
     tool.set_excluded_names({"shell"})  # shell excluded, not web_search
     raw = await tool.execute(query="select:web_search")
     assert any(m["name"] == "web_search" for m in json.loads(raw)["matched"])
+
+
+@pytest.mark.asyncio
+async def test_tool_search_exclusions_are_isolated_between_async_turns():
+    from agent.tools.tool_search import ToolSearchTool
+
+    registry = MagicMock()
+    registry.search.side_effect = (
+        lambda query, top_k, allowed_risk, excluded_names: [
+            {"name": query, "summary": query}
+        ]
+        if query not in (excluded_names or set())
+        else []
+    )
+    tool = ToolSearchTool(registry)
+
+    async def invoke(name: str) -> dict:
+        tool.set_excluded_names({name})
+        await asyncio.sleep(0)
+        return json.loads(await tool.execute(query=name))
+
+    shell_result, schedule_result = await asyncio.gather(
+        invoke("shell"),
+        invoke("schedule"),
+    )
+
+    assert shell_result["unlocked"] == []
+    assert schedule_result["unlocked"] == []
 
 
 # ── Item 3: _unlock_from_tool_search behavior ────────────────────────────────
