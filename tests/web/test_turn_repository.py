@@ -42,6 +42,18 @@ def test_create_turn_is_persisted_with_pending_status(repository) -> None:
     assert stored.finished_at is None
 
 
+def test_get_for_user_hides_another_users_turn(repository) -> None:
+    turn = repository.create(
+        user_id="user-1",
+        conversation_id="primary",
+        client_request_id="request-1",
+        content="private",
+    )
+
+    assert repository.get_for_user(turn.id, "user-1") == turn
+    assert repository.get_for_user(turn.id, "user-2") is None
+
+
 def test_reopen_preserves_turn(tmp_path: Path) -> None:
     db_path = tmp_path / "web.db"
     first = SQLiteTurnRepository(db_path)

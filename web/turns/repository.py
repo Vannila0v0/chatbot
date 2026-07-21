@@ -56,6 +56,8 @@ class TurnRepository(Protocol):
 
     def get(self, turn_id: str) -> Turn | None: ...
 
+    def get_for_user(self, turn_id: str, user_id: str) -> Turn | None: ...
+
     def list_for_conversation(
         self,
         *,

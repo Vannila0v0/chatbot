@@ -114,6 +114,15 @@ class SQLiteTurnRepository:
             row = self._get_row(turn_id)
         return _row_to_turn(row) if row is not None else None
 
+    def get_for_user(self, turn_id: str, user_id: str) -> Turn | None:
+        user_id = _required("user_id", user_id)
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM web_turns WHERE id = ? AND user_id = ?",
+                (turn_id, user_id),
+            ).fetchone()
+        return _row_to_turn(row) if row is not None else None
+
     def list_for_conversation(
         self,
         *,

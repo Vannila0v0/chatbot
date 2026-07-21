@@ -7,6 +7,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from web.api.identity import WEB_IDENTITY_COOKIE, WebIdentityService
 from web.api.routes import create_turn_router
 from web.events.broker import WebTurnEventBroker
 from web.events.models import WebTurnEventType
@@ -29,9 +30,18 @@ def event_broker() -> WebTurnEventBroker:
 
 
 @pytest.fixture
-def app(repository, event_broker: WebTurnEventBroker) -> FastAPI:
+def identity() -> WebIdentityService:
+    return WebIdentityService(b"test-web-identity-secret".ljust(32, b"!"))
+
+
+@pytest.fixture
+def app(
+    repository,
+    identity: WebIdentityService,
+    event_broker: WebTurnEventBroker,
+) -> FastAPI:
     application = FastAPI()
-    application.include_router(create_turn_router(repository, event_broker))
+    application.include_router(create_turn_router(repository, identity, event_broker))
     return application
 
 
@@ -42,8 +52,6 @@ def transport(app: FastAPI) -> httpx.ASGITransport:
 
 def _payload(**overrides):
     payload = {
-        "user_id": "user-1",
-        "conversation_id": "conversation-1",
         "client_request_id": "request-1",
         "content": "hello",
     }
@@ -64,16 +72,17 @@ async def test_create_turn_returns_accepted_pending_turn(
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "pending"
-    assert body["user_id"] == "user-1"
-    assert body["conversation_id"] == "conversation-1"
+    assert body["conversation_id"] == "primary"
     assert body["client_request_id"] == "request-1"
     assert body["content"] == "hello"
     assert body["answer"] is None
+    assert response.cookies.get(WEB_IDENTITY_COOKIE)
 
 
 @pytest.mark.asyncio
-async def test_list_turns_returns_only_requested_conversation_in_order(
+async def test_list_turns_returns_only_current_user_in_order(
     transport: httpx.ASGITransport,
+    repository,
 ) -> None:
     async with httpx.AsyncClient(
         transport=transport,
@@ -84,20 +93,16 @@ async def test_list_turns_returns_only_requested_conversation_in_order(
             "/api/turns",
             json=_payload(client_request_id="request-2", content="second"),
         )
-        _ = await client.post(
-            "/api/turns",
-            json=_payload(
-                client_request_id="request-other",
-                conversation_id="conversation-2",
-            ),
+        user_id = first.json()["user_id"]
+        repository.create(
+            user_id="another-user",
+            conversation_id="primary",
+            client_request_id="request-other",
+            content="other",
         )
         response = await client.get(
             "/api/turns",
-            params={
-                "user_id": "user-1",
-                "conversation_id": "conversation-1",
-                "limit": 2,
-            },
+            params={"limit": 2},
         )
 
     assert response.status_code == 200
@@ -105,27 +110,18 @@ async def test_list_turns_returns_only_requested_conversation_in_order(
         first.json()["id"],
         second.json()["id"],
     ]
+    assert all(turn["user_id"] == user_id for turn in response.json())
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "params",
-    [
-        {"user_id": "user-1"},
-        {"conversation_id": "conversation-1"},
-        {"user_id": "   ", "conversation_id": "conversation-1"},
-        {"user_id": "user-1", "conversation_id": "conversation-1", "limit": 101},
-    ],
-)
-async def test_list_turns_rejects_invalid_query(
+async def test_list_turns_rejects_invalid_limit(
     transport: httpx.ASGITransport,
-    params: dict[str, str | int],
 ) -> None:
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
     ) as client:
-        response = await client.get("/api/turns", params=params)
+        response = await client.get("/api/turns", params={"limit": 101})
 
     assert response.status_code == 422
 
@@ -207,11 +203,30 @@ async def test_get_missing_turn_returns_not_found(
 
 
 @pytest.mark.asyncio
+async def test_turn_and_sse_are_hidden_from_another_web_user(
+    transport: httpx.ASGITransport,
+) -> None:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as owner, httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as stranger:
+        created = await owner.post("/api/turns", json=_payload())
+        turn_id = created.json()["id"]
+
+        turn_response = await stranger.get(f"/api/turns/{turn_id}")
+        event_response = await stranger.get(f"/api/turns/{turn_id}/events")
+
+    assert turn_response.status_code == 404
+    assert event_response.status_code == 404
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("user_id", ""),
-        ("conversation_id", "   "),
         ("client_request_id", ""),
         ("content", "\n\t"),
     ],
@@ -239,39 +254,35 @@ async def test_sse_streams_queued_live_deltas_and_terminal_event(
     event_broker: WebTurnEventBroker,
     transport: httpx.ASGITransport,
 ) -> None:
-    turn = repository.create(
-        user_id="user-1",
-        conversation_id="conversation-1",
-        client_request_id="request-1",
-        content="hello",
-    )
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
     ) as client:
+        created = await client.post("/api/turns", json=_payload())
+        turn_id = created.json()["id"]
         response_task = asyncio.create_task(
-            client.get(f"/api/turns/{turn.id}/events")
+            client.get(f"/api/turns/{turn_id}/events")
         )
         for _ in range(100):
-            if event_broker.subscriber_count(turn.id) == 1:
+            if event_broker.subscriber_count(turn_id) == 1:
                 break
             await asyncio.sleep(0.01)
-        event_broker.publish(turn.id, WebTurnEventType.TURN_STARTED)
+        event_broker.publish(turn_id, WebTurnEventType.TURN_STARTED)
         event_broker.publish(
-            turn.id,
+            turn_id,
             WebTurnEventType.THINKING_DELTA,
             {"delta": "thinking"},
         )
         event_broker.publish(
-            turn.id,
+            turn_id,
             WebTurnEventType.TEXT_DELTA,
             {"delta": "answer"},
         )
         completed = repository.claim_next_pending()
         assert completed is not None
-        repository.mark_done(turn.id, "answer")
+        repository.mark_done(turn_id, "answer")
         event_broker.publish(
-            turn.id,
+            turn_id,
             WebTurnEventType.TURN_COMPLETED,
             {"answer": "answer"},
         )
@@ -289,7 +300,7 @@ async def test_sse_streams_queued_live_deltas_and_terminal_event(
     assert response.text.index("event: thinking.delta") < response.text.index(
         "event: text.delta"
     )
-    assert event_broker.subscriber_count(turn.id) == 0
+    assert event_broker.subscriber_count(turn_id) == 0
 
 
 @pytest.mark.asyncio
@@ -297,20 +308,15 @@ async def test_sse_returns_durable_terminal_state_immediately(
     repository,
     transport: httpx.ASGITransport,
 ) -> None:
-    turn = repository.create(
-        user_id="user-1",
-        conversation_id="conversation-1",
-        client_request_id="request-1",
-        content="hello",
-    )
-    repository.claim_next_pending()
-    repository.mark_done(turn.id, "finished")
-
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
     ) as client:
-        response = await client.get(f"/api/turns/{turn.id}/events")
+        created = await client.post("/api/turns", json=_payload())
+        turn_id = created.json()["id"]
+        repository.claim_next_pending()
+        repository.mark_done(turn_id, "finished")
+        response = await client.get(f"/api/turns/{turn_id}/events")
 
     assert response.status_code == 200
     assert "event: turn.completed" in response.text
@@ -323,33 +329,29 @@ async def test_sse_uses_live_snapshot_for_late_subscriber(
     event_broker: WebTurnEventBroker,
     transport: httpx.ASGITransport,
 ) -> None:
-    turn = repository.create(
-        user_id="user-1",
-        conversation_id="conversation-1",
-        client_request_id="request-1",
-        content="hello",
-    )
-    repository.claim_next_pending()
-    event_broker.publish(turn.id, WebTurnEventType.TURN_STARTED)
-    event_broker.publish(
-        turn.id,
-        WebTurnEventType.THINKING_DELTA,
-        {"delta": "already thinking"},
-    )
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
     ) as client:
+        created = await client.post("/api/turns", json=_payload())
+        turn_id = created.json()["id"]
+        repository.claim_next_pending()
+        event_broker.publish(turn_id, WebTurnEventType.TURN_STARTED)
+        event_broker.publish(
+            turn_id,
+            WebTurnEventType.THINKING_DELTA,
+            {"delta": "already thinking"},
+        )
         response_task = asyncio.create_task(
-            client.get(f"/api/turns/{turn.id}/events")
+            client.get(f"/api/turns/{turn_id}/events")
         )
         for _ in range(100):
-            if event_broker.subscriber_count(turn.id) == 1:
+            if event_broker.subscriber_count(turn_id) == 1:
                 break
             await asyncio.sleep(0.01)
-        repository.mark_done(turn.id, "done")
+        repository.mark_done(turn_id, "done")
         event_broker.publish(
-            turn.id,
+            turn_id,
             WebTurnEventType.TURN_COMPLETED,
             {"answer": "done"},
         )

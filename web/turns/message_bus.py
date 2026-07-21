@@ -15,6 +15,11 @@ if TYPE_CHECKING:
 
 WEB_CHANNEL = "web"
 
+
+def web_session_key(user_id: str) -> str:
+    return f"web:{user_id}:primary"
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,6 +68,7 @@ class WebTurnDispatcher:
             sender=turn.user_id,
             chat_id=turn.conversation_id,
             content=turn.content,
+            session_key_override=web_session_key(turn.user_id),
             metadata={
                 "turn_id": turn.id,
                 "user_id": turn.user_id,
