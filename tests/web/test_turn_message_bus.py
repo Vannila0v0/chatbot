@@ -12,6 +12,7 @@ from bus.events import InboundMessage, OutboundMessage
 from bus.queue import MessageBus
 from web.events.broker import WebTurnEventBroker
 from web.events.models import WebTurnEventType
+from web.tool_policy import WebToolPolicy
 from web.turns.message_bus import WebTurnCompletionHandler, WebTurnDispatcher
 from web.turns.models import TurnStatus
 from web.turns.sqlite_repository import SQLiteTurnRepository
@@ -50,6 +51,7 @@ def test_non_web_message_keeps_channel_chat_session_key() -> None:
     )
 
     assert message.session_key == "telegram:chat-1"
+    assert "allowed_tools" not in message.metadata
 
 
 @pytest.mark.asyncio
@@ -86,10 +88,27 @@ async def test_dispatcher_claims_and_publishes_correlated_web_turn(repository) -
         "turn_id": turn.id,
         "user_id": "user-1",
         "client_request_id": "request-1",
+        "allowed_tools": ["tool_search", "web_search"],
     }
     stored = repository.get(turn.id)
     assert stored is not None
     assert stored.status is TurnStatus.PROCESSING
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_uses_explicit_web_tool_policy(repository) -> None:
+    repository.create(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        client_request_id="request-1",
+        content="hello",
+    )
+    bus = _FakeBus()
+    policy = WebToolPolicy(allowed_tools=frozenset({"web_search"}))
+
+    await WebTurnDispatcher(repository, bus, tool_policy=policy).run_once()
+
+    assert bus.inbound[0].metadata["allowed_tools"] == ["web_search"]
 
 
 @pytest.mark.asyncio

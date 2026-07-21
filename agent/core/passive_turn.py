@@ -136,6 +136,19 @@ def _disabled_tools_from_msg(msg: object) -> set[str]:
     return set()
 
 
+def _allowed_tools_from_msg(msg: object) -> set[str] | None:
+    metadata: object = getattr(msg, "metadata", None)
+    if not isinstance(metadata, dict) or "allowed_tools" not in metadata:
+        return None
+    raw = metadata.get("allowed_tools")
+    if isinstance(raw, str):
+        return {raw} if raw else set()
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        return {item for item in raw if isinstance(item, str) and item}
+    # An explicitly supplied but malformed policy fails closed.
+    return set()
+
+
 class _NoopOutboundPort:
     async def dispatch(self, outbound: OutboundDispatch) -> bool:
         return False
@@ -564,6 +577,7 @@ class Reasoner(ABC):
         tool_event_channel: str = "",
         tool_event_chat_id: str = "",
         disabled_tools: set[str] | None = None,
+        allowed_tools: set[str] | None = None,
     ) -> ReasonerResult:
         """执行多轮 tool loop，并返回本轮结果。"""
 
@@ -778,6 +792,11 @@ class DefaultReasoner(Reasoner):
             self._stream_sink_factory(msg) if self._stream_sink_factory is not None else None
         )
         disabled_tools = _disabled_tools_from_msg(msg)
+        allowed_tools = _allowed_tools_from_msg(msg)
+        if allowed_tools is not None:
+            disabled_tools.update(
+                self._tools.get_registered_names() - allowed_tools
+            )
 
         # 2. 再按 trim plan + history window 顺序逐轮尝试。
         attempts = self._build_attempt_plans(total_history)
@@ -834,6 +853,7 @@ class DefaultReasoner(Reasoner):
                     tool_event_channel=msg.channel,
                     tool_event_chat_id=msg.chat_id,
                     disabled_tools=disabled_tools,
+                    allowed_tools=allowed_tools,
                 )
                 tools_used = list(result.metadata.get("tools_used") or [])
                 tools_unlocked = list(result.metadata.get("tools_unlocked") or [])
@@ -930,6 +950,7 @@ class DefaultReasoner(Reasoner):
         tool_event_channel: str = "",
         tool_event_chat_id: str = "",
         disabled_tools: set[str] | None = None,
+        allowed_tools: set[str] | None = None,
     ) -> ReasonerResult:
         # 1. 初始化消息上下文、本轮工具轨迹。
         messages = initial_messages
@@ -945,6 +966,8 @@ class DefaultReasoner(Reasoner):
         react_cache_hit_tokens = 0
         react_cache_seen = False
         disabled = set(disabled_tools or set())
+        if allowed_tools is not None:
+            disabled.update(self._tools.get_registered_names() - allowed_tools)
         if self._tool_search_enabled:
             always_on = self._tools.get_always_on_names()
             visible_names = (always_on | (preloaded_tools or set())) - disabled
@@ -1014,6 +1037,13 @@ class DefaultReasoner(Reasoner):
                 schema_names = self._tools.get_registered_names() - disabled
             elif schema_names is not None:
                 schema_names = [name for name in schema_names if name not in disabled]
+            if allowed_tools is not None:
+                if schema_names is None:
+                    schema_names = allowed_tools
+                else:
+                    schema_names = [
+                        name for name in schema_names if name in allowed_tools
+                    ]
             response = await self._llm.provider.chat(
                 messages=messages,
                 tools=self._tools.get_schemas(names=schema_names),
@@ -1047,7 +1077,10 @@ class DefaultReasoner(Reasoner):
                 # 6. 逐个执行本轮工具调用。
                 iter_calls: list[dict[str, Any]] = []
                 for tool_batch_index, tool_call in enumerate(response.tool_calls):
-                    if tool_call.name in disabled:
+                    if tool_call.name in disabled or (
+                        allowed_tools is not None
+                        and tool_call.name not in allowed_tools
+                    ):
                         await self._observe_tool_call_started(
                             session_key=tool_event_session_key,
                             channel=tool_event_channel,
@@ -1222,11 +1255,16 @@ class DefaultReasoner(Reasoner):
                     # set_excluded_names() instead of the old ContextVar channel.
                     if (
                         tool_call.name == "tool_search"
-                        and visible_names is not None
                         and self._tool_search_tool is not None
                     ):
                         self._tool_search_tool.set_excluded_names(
-                            visible_names | disabled
+                            (visible_names or set())
+                            | disabled
+                            | (
+                                self._tools.get_registered_names() - allowed_tools
+                                if allowed_tools is not None
+                                else set()
+                            )
                         )
                     _args_preview = support.log_preview(tool_call.arguments, 120)
                     logger.info("[工具执行→] %s  args=%s", tool_call.name, _args_preview)
@@ -1313,7 +1351,11 @@ class DefaultReasoner(Reasoner):
                         _newly_unlocked = [
                             name
                             for name in self._discovery.unlock_names_from_result(normalized.text)
-                            if name not in visible_names and name not in disabled
+                            if name not in visible_names
+                            and name not in disabled
+                            and (
+                                allowed_tools is None or name in allowed_tools
+                            )
                         ]
                         if _newly_unlocked:
                             visible_names.update(_newly_unlocked)
