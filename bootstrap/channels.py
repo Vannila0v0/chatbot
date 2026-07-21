@@ -42,7 +42,6 @@ async def start_channels(
             event_bus=event_bus,
             interrupt_controller=interrupt_controller,
             channel_name=tg.channel_name,
-            logical_session_key=config.session.primary_key,
         )
         await tg_channel.start()
         push_tool.register_channel(

@@ -36,12 +36,10 @@ class WebTurnDispatcher:
         repository: TurnRepository,
         bus: WebTurnBus,
         event_broker: WebTurnEventBroker | None = None,
-        logical_session_key: str = "",
     ) -> None:
         self._repository = repository
         self._bus = bus
         self._event_broker = event_broker
-        self._logical_session_key = logical_session_key.strip()
         self._running = False
 
     async def run(self, poll_interval_seconds: float = 0.25) -> None:
@@ -70,7 +68,6 @@ class WebTurnDispatcher:
                 "user_id": turn.user_id,
                 "client_request_id": turn.client_request_id,
             },
-            logical_session_key=self._logical_session_key,
         )
         try:
             await self._bus.publish_inbound(inbound)

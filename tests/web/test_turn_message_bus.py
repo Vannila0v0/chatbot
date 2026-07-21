@@ -81,26 +81,6 @@ async def test_dispatcher_claims_and_publishes_correlated_web_turn(repository) -
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_assigns_server_owned_logical_session(repository) -> None:
-    repository.create(
-        user_id="user-1",
-        conversation_id="browser-conversation",
-        client_request_id="request-1",
-        content="hello",
-    )
-    bus = _FakeBus()
-
-    await WebTurnDispatcher(
-        repository,
-        bus,
-        logical_session_key="companion:primary",
-    ).run_once()
-
-    assert bus.inbound[0].chat_id == "browser-conversation"
-    assert bus.inbound[0].session_key == "companion:primary"
-
-
-@pytest.mark.asyncio
 async def test_dispatch_failure_marks_claimed_turn_failed(repository) -> None:
     turn = repository.create(
         user_id="user-1",

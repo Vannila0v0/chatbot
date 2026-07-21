@@ -4,7 +4,7 @@ import pytest
 
 from agent.policies.delegation import SpawnDecision, SpawnDecisionMeta
 from bus.event_bus import EventBus
-from bus.events import InboundMessage, SpawnCompletionItem
+from bus.events import SpawnCompletionItem
 from bus.internal_events import SpawnCompletionEvent
 
 
@@ -48,34 +48,6 @@ def test_spawn_completion_item_carries_typed_payload():
     assert item.session_key == "telegram:123"
     assert item.event == event
     assert item.decision == decision
-
-
-def test_inbound_items_prefer_trusted_logical_session_key():
-    event = SpawnCompletionEvent(
-        job_id="abcd1234",
-        label="job",
-        task="do work",
-        status="completed",
-        exit_reason="completed",
-        result="done",
-    )
-
-    item = SpawnCompletionItem(
-        channel="telegram",
-        chat_id="123",
-        event=event,
-        logical_session_key="companion:primary",
-    )
-    inbound = InboundMessage(
-        channel="web",
-        sender="user",
-        chat_id="browser-conversation",
-        content="hello",
-        logical_session_key="companion:primary",
-    )
-
-    assert item.session_key == "companion:primary"
-    assert inbound.session_key == "companion:primary"
 
 
 @pytest.mark.asyncio

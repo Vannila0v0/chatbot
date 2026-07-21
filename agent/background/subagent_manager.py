@@ -46,7 +46,6 @@ class RunningSubagentJob:
     profile: str
     origin_channel: str
     origin_chat_id: str
-    origin_session_key: str
     task_dir: str
     retry_count: int
     started_at: str
@@ -151,7 +150,6 @@ class SubagentManager:
         label: str | None,
         origin_channel: str,
         origin_chat_id: str,
-        origin_session_key: str = "",
         decision: SpawnDecision | None = None,
         profile: str = PROFILE_RESEARCH,
         retry_count: int = 0,
@@ -169,7 +167,6 @@ class SubagentManager:
                 "task_dir": str(task_dir),
                 "origin_channel": origin_channel,
                 "origin_chat_id": origin_chat_id,
-                "origin_session_key": origin_session_key,
                 "profile": profile,
                 "retry_count": retry_count,
                 "decision": _decision_payload(decision),
@@ -184,7 +181,6 @@ class SubagentManager:
                 task_dir=task_dir,
                 origin_channel=origin_channel,
                 origin_chat_id=origin_chat_id,
-                origin_session_key=origin_session_key,
                 decision=decision,
                 profile=profile,
                 retry_count=retry_count,
@@ -200,7 +196,6 @@ class SubagentManager:
             profile=profile,
             origin_channel=origin_channel,
             origin_chat_id=origin_chat_id,
-            origin_session_key=origin_session_key,
             task_dir=str(task_dir),
             retry_count=retry_count,
             started_at=datetime.now(timezone.utc).isoformat(),
@@ -255,7 +250,6 @@ class SubagentManager:
         task_dir: Path,
         origin_channel: str,
         origin_chat_id: str,
-        origin_session_key: str,
         decision: SpawnDecision | None,
         profile: str = PROFILE_RESEARCH,
         retry_count: int = 0,
@@ -289,7 +283,6 @@ class SubagentManager:
                     task=task,
                     origin_channel=origin_channel,
                     origin_chat_id=origin_chat_id,
-                    origin_session_key=origin_session_key,
                     status="cancelled",
                     exit_reason="cancelled",
                     result="后台任务已按请求取消。",
@@ -317,7 +310,6 @@ class SubagentManager:
             task=task,
             origin_channel=origin_channel,
             origin_chat_id=origin_chat_id,
-            origin_session_key=origin_session_key,
             status=result.status,
             exit_reason=result.exit_reason,
             result=result.result_summary,
@@ -351,7 +343,6 @@ class SubagentManager:
             task=job.task,
             origin_channel=job.origin_channel,
             origin_chat_id=job.origin_chat_id,
-            origin_session_key=job.origin_session_key,
             status="cancelled",
             exit_reason="cancelled",
             result="后台任务已按请求取消。",
@@ -391,7 +382,6 @@ class SubagentManager:
         task: str,
         origin_channel: str,
         origin_chat_id: str,
-        origin_session_key: str,
         status: str,
         exit_reason: str,
         result: str,
@@ -423,7 +413,6 @@ class SubagentManager:
                 profile=profile,
             ),
             decision=decision,
-            logical_session_key=origin_session_key,
         )
         # 3. 最后发布到 bus，让主 agent 以同一会话身份继续回复用户。
         await self._bus.publish_inbound(item)

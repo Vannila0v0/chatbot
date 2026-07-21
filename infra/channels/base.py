@@ -63,26 +63,15 @@ class SessionIdentityIndex:
         channel: str,
         metadata_key: str,
         normalizer: Callable[[str], str] | None = None,
-        logical_session_key: str = "",
     ) -> None:
         self._session_manager = session_manager
         self._channel = channel
         self._metadata_key = metadata_key
         self._normalizer = normalizer or (lambda value: value)
-        self._logical_session_key = logical_session_key.strip()
         self.mapping: dict[str, str] = {}
 
     def rebuild(self) -> dict[str, str]:
         self.mapping.clear()
-        if self._logical_session_key:
-            session = self._session_manager.get_or_create(self._logical_session_key)
-            raw_value = session.metadata.get(self._metadata_key)
-            chat_id = session.metadata.get(f"{self._channel}_chat_id")
-            if isinstance(raw_value, str) and isinstance(chat_id, str):
-                normalized = self._normalize(raw_value)
-                if normalized and chat_id:
-                    self.mapping[normalized] = chat_id
-            return dict(self.mapping)
         for entry in self._session_manager.get_channel_metadata(self._channel):
             raw_value = entry["metadata"].get(self._metadata_key)
             if not isinstance(raw_value, str):
@@ -103,16 +92,10 @@ class SessionIdentityIndex:
         if not normalized:
             return
         self.mapping[normalized] = chat_id
-        session_key = self._logical_session_key or f"{self._channel}:{chat_id}"
-        session = self._session_manager.get_or_create(session_key)
-        route_key = f"{self._channel}_chat_id"
-        if (
-            session.metadata.get(self._metadata_key) == normalized
-            and session.metadata.get(route_key) == chat_id
-        ):
+        session = self._session_manager.get_or_create(f"{self._channel}:{chat_id}")
+        if session.metadata.get(self._metadata_key) == normalized:
             return
         session.metadata[self._metadata_key] = normalized
-        session.metadata[route_key] = chat_id
         await self._session_manager.save_async(session)
 
     def _normalize(self, value: str) -> str:

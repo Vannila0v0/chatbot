@@ -42,10 +42,6 @@ dev_mode = false
 [agent.context]
 memory_window = 40
 
-# Web, Telegram, and Proactive share one long-lived Agent session.
-[session]
-primary_key = "companion:primary"
-
 [agent.tools]
 search_enabled = true
 
