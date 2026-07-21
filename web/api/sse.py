@@ -23,13 +23,14 @@ _SSE_HEARTBEAT_SECONDS = 15.0
 def create_turn_event_response(
     *,
     turn_id: str,
+    user_id: str,
     request: Request,
     repository: TurnRepository,
     broker: WebTurnEventBroker,
 ) -> StreamingResponse:
     # Subscribe before reading durable state so a transition cannot fall in between.
     subscription = broker.subscribe(turn_id)
-    turn = repository.get(turn_id)
+    turn = repository.get_for_user(turn_id, user_id)
     if turn is None:
         subscription.close()
         raise HTTPException(

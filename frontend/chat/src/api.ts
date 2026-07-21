@@ -1,8 +1,6 @@
 import type { TurnEvent, TurnResponse } from "./types";
 
 interface CreateTurnInput {
-  userId: string;
-  conversationId: string;
   clientRequestId: string;
   content: string;
 }
@@ -12,8 +10,6 @@ export async function createTurn(input: CreateTurnInput): Promise<TurnResponse> 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      user_id: input.userId,
-      conversation_id: input.conversationId,
       client_request_id: input.clientRequestId,
       content: input.content,
     }),
@@ -32,14 +28,8 @@ export async function getTurn(turnId: string): Promise<TurnResponse> {
   return response.json() as Promise<TurnResponse>;
 }
 
-export async function listTurns(
-  userId: string,
-  conversationId: string,
-  limit = 50,
-): Promise<TurnResponse[]> {
+export async function listTurns(limit = 50): Promise<TurnResponse[]> {
   const query = new URLSearchParams({
-    user_id: userId,
-    conversation_id: conversationId,
     limit: String(limit),
   });
   const response = await fetch(`/api/turns?${query.toString()}`);

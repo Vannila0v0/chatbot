@@ -28,10 +28,13 @@ class InboundMessage:
     timestamp: datetime = field(default_factory=datetime.now)
     media: list[str] = field(default_factory=_empty_media)
     metadata: dict[str, Any] = field(default_factory=_empty_metadata)
+    session_key_override: str | None = None
 
     @property
     def session_key(self) -> str:
         """唯一会话标识，用于维护对话历史"""
+        if self.session_key_override:
+            return self.session_key_override
         return f"{self.channel}:{self.chat_id}"
 
 

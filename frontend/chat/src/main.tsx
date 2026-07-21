@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import React, { useEffect, useReducer, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Asterisk,
@@ -40,12 +40,11 @@ function ChatApp(): React.JSX.Element {
   const sourceRef = useRef<EventSource | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
-  const identity = useMemo(() => loadIdentity(), []);
   const busy = state.activeMessageId !== null;
 
   useEffect(() => {
     let cancelled = false;
-    void listTurns(identity.userId, identity.conversationId).then((turns) => {
+    void listTurns().then((turns) => {
       if (!cancelled) dispatch({ type: "hydrate", turns });
     }).catch((error) => {
       if (!cancelled) {
@@ -55,7 +54,7 @@ function ChatApp(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [identity.conversationId, identity.userId]);
+  }, []);
 
   useEffect(() => {
     if (!state.activeTurnId || sourceRef.current) return;
@@ -83,8 +82,6 @@ function ChatApp(): React.JSX.Element {
     resetTextarea(textareaRef.current);
     try {
       const turn = await createTurn({
-        userId: identity.userId,
-        conversationId: identity.conversationId,
         clientRequestId: requestId,
         content: normalized,
       });
@@ -336,25 +333,6 @@ function isTerminalEvent(event: TurnEvent): boolean {
   return event.type === "turn.completed"
     || event.type === "turn.failed"
     || event.type === "turn.cancelled";
-}
-
-function loadIdentity(): { userId: string; conversationId: string } {
-  return {
-    userId: storedId("akashic.web.user_id", "web-user"),
-    conversationId: storedId("akashic.web.conversation_id", "web-conversation"),
-  };
-}
-
-function storedId(key: string, prefix: string): string {
-  try {
-    const existing = localStorage.getItem(key);
-    if (existing) return existing;
-    const value = `${prefix}-${crypto.randomUUID()}`;
-    localStorage.setItem(key, value);
-    return value;
-  } catch {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
 }
 
 function activityLabel(message: ChatMessage): string {

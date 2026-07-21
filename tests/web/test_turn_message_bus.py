@@ -41,6 +41,17 @@ def repository(tmp_path: Path):
         store.close()
 
 
+def test_non_web_message_keeps_channel_chat_session_key() -> None:
+    message = InboundMessage(
+        channel="telegram",
+        sender="user-1",
+        chat_id="chat-1",
+        content="hello",
+    )
+
+    assert message.session_key == "telegram:chat-1"
+
+
 @pytest.mark.asyncio
 async def test_dispatcher_returns_false_when_no_turn_is_pending(repository) -> None:
     bus = _FakeBus()
@@ -69,6 +80,7 @@ async def test_dispatcher_claims_and_publishes_correlated_web_turn(repository) -
     assert message.channel == "web"
     assert message.sender == "user-1"
     assert message.chat_id == "conversation-1"
+    assert message.session_key == "web:user-1:primary"
     assert message.content == "hello"
     assert message.metadata == {
         "turn_id": turn.id,

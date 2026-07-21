@@ -31,6 +31,7 @@ from core.common.timekit import utcnow
 from core.memory.engine import MemoryAdminApi
 from session.store import SessionStore
 from web.api.chat import mount_chat_ui
+from web.api.identity import WebIdentityService
 from web.api.routes import create_turn_router
 from web.events.broker import WebTurnEventBroker
 from web.turns.repository import TurnRepository
@@ -784,7 +785,10 @@ def create_dashboard_app(
     app.mount("/assets", StaticFiles(directory=static_dir), name="dashboard-assets")
     mount_chat_ui(app, chat_static_dir)
     if turn_repository is not None:
-        app.include_router(create_turn_router(turn_repository, turn_event_broker))
+        web_identity = WebIdentityService.from_workspace(workspace)
+        app.include_router(
+            create_turn_router(turn_repository, web_identity, turn_event_broker)
+        )
 
     # Compile TypeScript plugin panels and mount plugin routes
     if plugins_root.is_dir():

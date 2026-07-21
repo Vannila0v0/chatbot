@@ -11,8 +11,6 @@ RequiredText = Annotated[str, StringConstraints(strip_whitespace=True, min_lengt
 
 
 class CreateTurnRequest(BaseModel):
-    user_id: RequiredText
-    conversation_id: RequiredText
     client_request_id: RequiredText
     content: RequiredText
 
