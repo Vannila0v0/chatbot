@@ -56,6 +56,14 @@ class TurnRepository(Protocol):
 
     def get(self, turn_id: str) -> Turn | None: ...
 
+    def list_for_conversation(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        limit: int = 50,
+    ) -> list[Turn]: ...
+
     def claim_next_pending(self) -> Turn | None: ...
 
     def mark_done(self, turn_id: str, answer: str) -> Turn: ...

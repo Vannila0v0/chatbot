@@ -1,4 +1,10 @@
-import type { ChatMessage, ToolProgress, TurnEvent, TurnStatus } from "./types";
+import type {
+  ChatMessage,
+  ToolProgress,
+  TurnEvent,
+  TurnResponse,
+  TurnStatus,
+} from "./types";
 
 export interface ChatState {
   messages: ChatMessage[];
@@ -6,11 +12,15 @@ export interface ChatState {
   activeTurnId: string | null;
   lastSequence: number;
   connection: "idle" | "connecting" | "open" | "retrying";
+  hydrating: boolean;
+  historyError: string | null;
 }
 
 export type ChatAction =
   | { type: "begin"; requestId: string; content: string }
   | { type: "accepted"; turnId: string }
+  | { type: "hydrate"; turns: TurnResponse[] }
+  | { type: "history_failed"; message: string }
   | { type: "event"; event: TurnEvent }
   | { type: "submit_failed"; message: string }
   | { type: "connection"; value: ChatState["connection"] };
@@ -21,6 +31,8 @@ export const initialChatState: ChatState = {
   activeTurnId: null,
   lastSequence: 0,
   connection: "idle",
+  hydrating: true,
+  historyError: null,
 };
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -36,10 +48,33 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       activeTurnId: null,
       lastSequence: 0,
       connection: "connecting",
+      historyError: null,
     };
   }
   if (action.type === "accepted") {
     return { ...state, activeTurnId: action.turnId };
+  }
+  if (action.type === "hydrate") {
+    const active = action.turns.find((turn) => turn.status === "processing")
+      ?? action.turns.find((turn) => turn.status === "pending")
+      ?? null;
+    return {
+      ...state,
+      messages: action.turns.flatMap(messagesFromTurn),
+      activeMessageId: active?.id ?? null,
+      activeTurnId: active?.id ?? null,
+      lastSequence: 0,
+      connection: active ? "connecting" : "idle",
+      hydrating: false,
+      historyError: null,
+    };
+  }
+  if (action.type === "history_failed") {
+    return {
+      ...state,
+      hydrating: false,
+      historyError: action.message,
+    };
   }
   if (action.type === "connection") {
     return { ...state, connection: action.value };
@@ -113,6 +148,19 @@ function message(
   status: TurnStatus,
 ): ChatMessage {
   return { id, role, content, thinking: "", tools: [], status, error: null };
+}
+
+function messagesFromTurn(turn: TurnResponse): ChatMessage[] {
+  const error = turn.status === "failed"
+    ? turn.error_message || "本轮处理失败"
+    : turn.status === "cancelled" ? "本轮已取消" : null;
+  return [
+    message(`${turn.id}:user`, "user", turn.content, "done"),
+    {
+      ...message(turn.id, "assistant", turn.answer ?? "", turn.status),
+      error,
+    },
+  ];
 }
 
 function updateActive(

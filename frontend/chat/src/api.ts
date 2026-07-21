@@ -32,6 +32,23 @@ export async function getTurn(turnId: string): Promise<TurnResponse> {
   return response.json() as Promise<TurnResponse>;
 }
 
+export async function listTurns(
+  userId: string,
+  conversationId: string,
+  limit = 50,
+): Promise<TurnResponse[]> {
+  const query = new URLSearchParams({
+    user_id: userId,
+    conversation_id: conversationId,
+    limit: String(limit),
+  });
+  const response = await fetch(`/api/turns?${query.toString()}`);
+  if (!response.ok) {
+    throw new Error(await responseError(response));
+  }
+  return response.json() as Promise<TurnResponse[]>;
+}
+
 export function parseTurnEvent(event: MessageEvent<string>): TurnEvent {
   return JSON.parse(event.data) as TurnEvent;
 }

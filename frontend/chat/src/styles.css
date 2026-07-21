@@ -127,6 +127,15 @@ button {
   text-align: center;
 }
 
+.conversation-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 .empty-mark {
   margin-bottom: 16px;
 }
@@ -177,6 +186,24 @@ button {
   width: min(860px, calc(100% - 48px));
   margin: 0 auto;
   padding: 48px 0 56px;
+}
+
+.history-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 24px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--error);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.empty-history-notice {
+  width: min(580px, 100%);
+  justify-content: center;
+  margin: 20px auto -12px;
 }
 
 .message {
