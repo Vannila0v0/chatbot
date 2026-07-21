@@ -60,6 +60,58 @@ def test_reopen_preserves_turn(tmp_path: Path) -> None:
         second.close()
 
 
+def test_list_for_conversation_is_isolated_ordered_and_limited(repository) -> None:
+    first = repository.create(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        client_request_id="request-1",
+        content="first",
+    )
+    second = repository.create(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        client_request_id="request-2",
+        content="second",
+    )
+    third = repository.create(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        client_request_id="request-3",
+        content="third",
+    )
+    repository.create(
+        user_id="user-1",
+        conversation_id="conversation-2",
+        client_request_id="request-other-conversation",
+        content="other conversation",
+    )
+    repository.create(
+        user_id="user-2",
+        conversation_id="conversation-1",
+        client_request_id="request-other-user",
+        content="other user",
+    )
+
+    turns = repository.list_for_conversation(
+        user_id="user-1",
+        conversation_id="conversation-1",
+        limit=2,
+    )
+
+    assert [turn.id for turn in turns] == [second.id, third.id]
+    assert first.id not in {turn.id for turn in turns}
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+def test_list_for_conversation_rejects_invalid_limit(repository, limit: int) -> None:
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        repository.list_for_conversation(
+            user_id="user-1",
+            conversation_id="conversation-1",
+            limit=limit,
+        )
+
+
 def test_create_is_idempotent_per_user_and_client_request(repository) -> None:
     first = repository.create(
         user_id="user-1",

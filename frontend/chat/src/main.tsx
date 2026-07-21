@@ -10,7 +10,7 @@ import {
   SendHorizontal,
   Wrench,
 } from "lucide-react";
-import { createTurn, getTurn, parseTurnEvent } from "./api";
+import { createTurn, getTurn, listTurns, parseTurnEvent } from "./api";
 import { chatReducer, initialChatState } from "./state";
 import type { ChatMessage, TurnEvent, TurnEventType, TurnResponse } from "./types";
 import "./styles.css";
@@ -43,7 +43,30 @@ function ChatApp(): React.JSX.Element {
   const identity = useMemo(() => loadIdentity(), []);
   const busy = state.activeMessageId !== null;
 
-  useEffect(() => () => sourceRef.current?.close(), []);
+  useEffect(() => {
+    let cancelled = false;
+    void listTurns(identity.userId, identity.conversationId).then((turns) => {
+      if (!cancelled) dispatch({ type: "hydrate", turns });
+    }).catch((error) => {
+      if (!cancelled) {
+        dispatch({ type: "history_failed", message: errorMessage(error) });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [identity.conversationId, identity.userId]);
+
+  useEffect(() => {
+    if (!state.activeTurnId || sourceRef.current) return;
+    const source = connectToTurn(state.activeTurnId, dispatch);
+    sourceRef.current = source;
+    return () => {
+      source.close();
+      if (sourceRef.current === source) sourceRef.current = null;
+    };
+  }, [state.activeTurnId]);
+
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({
       behavior: busy ? "auto" : "smooth",
@@ -53,7 +76,7 @@ function ChatApp(): React.JSX.Element {
 
   const submit = async (content = draft): Promise<void> => {
     const normalized = content.trim();
-    if (!normalized || busy) return;
+    if (!normalized || busy || state.hydrating) return;
     const requestId = crypto.randomUUID();
     dispatch({ type: "begin", requestId, content: normalized });
     setDraft("");
@@ -66,7 +89,6 @@ function ChatApp(): React.JSX.Element {
         content: normalized,
       });
       dispatch({ type: "accepted", turnId: turn.id });
-      sourceRef.current = connectToTurn(turn, dispatch, sourceRef);
     } catch (error) {
       dispatch({ type: "submit_failed", message: errorMessage(error) });
     }
@@ -80,16 +102,27 @@ function ChatApp(): React.JSX.Element {
           <span>Akashic</span>
         </a>
         <div className="runtime-state" aria-live="polite">
-          <span className={`runtime-dot ${busy ? "working" : "ready"}`} />
-          {connectionLabel(state.connection, busy)}
+          <span className={`runtime-dot ${busy || state.hydrating ? "working" : "ready"}`} />
+          {connectionLabel(state.connection, busy, state.hydrating)}
         </div>
       </header>
 
       <section className={`conversation ${state.messages.length ? "has-messages" : "empty"}`}>
-        {state.messages.length === 0 ? (
-          <EmptyConversation onSelect={(value) => void submit(value)} />
+        {state.hydrating ? (
+          <LoadingConversation />
+        ) : state.messages.length === 0 ? (
+          <EmptyConversation
+            error={state.historyError}
+            onSelect={(value) => void submit(value)}
+          />
         ) : (
           <div className="message-list" aria-live="polite">
+            {state.historyError && (
+              <div className="history-notice" role="alert">
+                <CircleAlert size={16} />
+                <span>{state.historyError}</span>
+              </div>
+            )}
             {state.messages.map((message) => (
               <Message key={message.id} message={message} />
             ))}
@@ -110,9 +143,9 @@ function ChatApp(): React.JSX.Element {
             ref={textareaRef}
             value={draft}
             rows={1}
-            placeholder={busy ? "等待当前回复完成" : "发消息给 Akashic"}
+            placeholder={state.hydrating ? "正在恢复会话" : busy ? "等待当前回复完成" : "发消息给 Akashic"}
             aria-label="消息内容"
-            disabled={busy}
+            disabled={busy || state.hydrating}
             onChange={(event) => {
               setDraft(event.target.value);
               resizeTextarea(event.currentTarget);
@@ -127,7 +160,7 @@ function ChatApp(): React.JSX.Element {
           <button
             className="send-button"
             type="submit"
-            disabled={busy || !draft.trim()}
+            disabled={busy || state.hydrating || !draft.trim()}
             aria-label="发送消息"
             title="发送消息"
           >
@@ -140,11 +173,32 @@ function ChatApp(): React.JSX.Element {
   );
 }
 
-function EmptyConversation({ onSelect }: { onSelect: (value: string) => void }): React.JSX.Element {
+function LoadingConversation(): React.JSX.Element {
+  return (
+    <div className="conversation-loading" role="status">
+      <LoaderCircle className="spin" size={20} />
+      <span>正在恢复会话</span>
+    </div>
+  );
+}
+
+function EmptyConversation({
+  error,
+  onSelect,
+}: {
+  error: string | null;
+  onSelect: (value: string) => void;
+}): React.JSX.Element {
   return (
     <div className="empty-content">
       <div className="empty-mark"><Asterisk size={26} strokeWidth={1.7} /></div>
       <h1>今天想从哪里开始？</h1>
+      {error && (
+        <div className="history-notice empty-history-notice" role="alert">
+          <CircleAlert size={16} />
+          <span>{error}</span>
+        </div>
+      )}
       <div className="starter-list">
         {STARTERS.map((starter) => (
           <button type="button" key={starter} onClick={() => onSelect(starter)}>
@@ -231,28 +285,25 @@ function ActivityPanel({ message, active }: { message: ChatMessage; active: bool
 }
 
 function connectToTurn(
-  turn: TurnResponse,
+  turnId: string,
   dispatch: React.Dispatch<Parameters<typeof chatReducer>[1]>,
-  sourceRef: React.MutableRefObject<EventSource | null>,
 ): EventSource {
-  const source = new EventSource(`/api/turns/${encodeURIComponent(turn.id)}/events`);
+  const source = new EventSource(`/api/turns/${encodeURIComponent(turnId)}/events`);
   source.onopen = () => dispatch({ type: "connection", value: "open" });
   const handle = (rawEvent: Event): void => {
     const event = parseTurnEvent(rawEvent as MessageEvent<string>);
     if (isTerminalEvent(event)) {
       source.close();
-      sourceRef.current = null;
     }
     dispatch({ type: "event", event });
   };
   EVENT_TYPES.forEach((eventType) => source.addEventListener(eventType, handle));
   source.onerror = () => {
     dispatch({ type: "connection", value: "retrying" });
-    void getTurn(turn.id).then((latest) => {
+    void getTurn(turnId).then((latest) => {
       const terminal = terminalEvent(latest);
       if (!terminal) return;
       source.close();
-      sourceRef.current = null;
       dispatch({ type: "event", event: terminal });
     }).catch(() => undefined);
   };
@@ -312,7 +363,8 @@ function activityLabel(message: ChatMessage): string {
   return message.status === "pending" ? "等待处理" : "正在组织回复";
 }
 
-function connectionLabel(connection: string, busy: boolean): string {
+function connectionLabel(connection: string, busy: boolean, hydrating: boolean): string {
+  if (hydrating) return "正在恢复会话";
   if (!busy) return "准备就绪";
   if (connection === "retrying") return "正在重新连接";
   if (connection === "connecting") return "正在连接";

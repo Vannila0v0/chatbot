@@ -2,10 +2,15 @@ export type TurnStatus = "pending" | "processing" | "done" | "failed" | "cancell
 
 export interface TurnResponse {
   id: string;
+  user_id: string;
+  conversation_id: string;
+  client_request_id: string;
+  content: string;
   status: TurnStatus;
   answer: string | null;
   error_code: string | null;
   error_message: string | null;
+  created_at: string;
 }
 
 export type TurnEventType =

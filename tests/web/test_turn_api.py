@@ -72,6 +72,65 @@ async def test_create_turn_returns_accepted_pending_turn(
 
 
 @pytest.mark.asyncio
+async def test_list_turns_returns_only_requested_conversation_in_order(
+    transport: httpx.ASGITransport,
+) -> None:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        first = await client.post("/api/turns", json=_payload())
+        second = await client.post(
+            "/api/turns",
+            json=_payload(client_request_id="request-2", content="second"),
+        )
+        _ = await client.post(
+            "/api/turns",
+            json=_payload(
+                client_request_id="request-other",
+                conversation_id="conversation-2",
+            ),
+        )
+        response = await client.get(
+            "/api/turns",
+            params={
+                "user_id": "user-1",
+                "conversation_id": "conversation-1",
+                "limit": 2,
+            },
+        )
+
+    assert response.status_code == 200
+    assert [turn["id"] for turn in response.json()] == [
+        first.json()["id"],
+        second.json()["id"],
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"user_id": "user-1"},
+        {"conversation_id": "conversation-1"},
+        {"user_id": "   ", "conversation_id": "conversation-1"},
+        {"user_id": "user-1", "conversation_id": "conversation-1", "limit": 101},
+    ],
+)
+async def test_list_turns_rejects_invalid_query(
+    transport: httpx.ASGITransport,
+    params: dict[str, str | int],
+) -> None:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/api/turns", params=params)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_repeated_request_returns_same_turn(
     transport: httpx.ASGITransport,
 ) -> None:

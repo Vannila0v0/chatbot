@@ -114,6 +114,29 @@ class SQLiteTurnRepository:
             row = self._get_row(turn_id)
         return _row_to_turn(row) if row is not None else None
 
+    def list_for_conversation(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        limit: int = 50,
+    ) -> list[Turn]:
+        user_id = _required("user_id", user_id)
+        conversation_id = _required("conversation_id", conversation_id)
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self._lock:
+            rows = self._db.execute(
+                """
+                SELECT * FROM web_turns
+                WHERE user_id = ? AND conversation_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (user_id, conversation_id, limit),
+            ).fetchall()
+        return [_row_to_turn(row) for row in reversed(rows)]
+
     def claim_next_pending(self) -> Turn | None:
         with self._lock:
             self._begin()
