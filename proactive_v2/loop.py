@@ -81,6 +81,7 @@ class ProactiveLoop:
         fitbit_url: str = "http://127.0.0.1:18765",
         fitbit_poll_interval: int = 300,
         tool_hooks: list[ToolHook] | None = None,
+        logical_session_key: str = "",
     ) -> None:
         self._sessions = session_manager
         self._provider = provider
@@ -97,6 +98,7 @@ class ProactiveLoop:
         self._passive_busy_fn = passive_busy_fn
         self._shared_tools = shared_tools
         self._tool_hooks = tool_hooks or []
+        self._logical_session_key = logical_session_key.strip()
         self._fitbit_enabled = bool(fitbit_enabled)
         self._fitbit_url = str(fitbit_url or "http://127.0.0.1:18765")
         self._fitbit_poll_interval = max(1, int(fitbit_poll_interval))
@@ -160,6 +162,7 @@ class ProactiveLoop:
             presence=self._presence,
             rng=self._rng,
             fitbit=fitbit_provider,
+            logical_session_key=self._logical_session_key,
         )
 
     def _build_agent_tick(self):

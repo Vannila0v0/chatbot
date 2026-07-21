@@ -108,6 +108,11 @@ class WiringConfig:
 
 
 @dataclass
+class SessionConfig:
+    primary_key: str = "companion:primary"
+
+
+@dataclass
 class Config:
     provider: str
     model: str
@@ -139,6 +144,7 @@ class Config:
     dev_mode: bool = False
     peer_agents: list[PeerAgentConfig] = field(default_factory=list)
     wiring: WiringConfig = field(default_factory=WiringConfig)
+    session: SessionConfig = field(default_factory=SessionConfig)
 
     @classmethod
     def load(cls, path: str | Path = "config.toml") -> Config:
@@ -159,6 +165,7 @@ __all__ = [
     "QQBotChannelConfig",
     "QQBotGroupConfig",
     "QQGroupConfig",
+    "SessionConfig",
     "TelegramChannelConfig",
     "WiringConfig",
 ]
