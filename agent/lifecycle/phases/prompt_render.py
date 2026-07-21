@@ -87,6 +87,7 @@ class _RenderPromptModule:
             ContextRequest(
                 history=ctx.history,
                 current_message=ctx.content,
+                session_key=ctx.session_key,
                 media=ctx.media,
                 skill_names=ctx.skill_names,
                 channel=ctx.channel,

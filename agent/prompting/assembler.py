@@ -89,6 +89,7 @@ class PromptAssembler:
         *,
         history: list[dict[str, Any]],
         current_message: str,
+        session_key: str | None = None,
         media: list[str] | None = None,
         skill_names: list[str] | None = None,
         channel: str | None = None,
@@ -104,6 +105,7 @@ class PromptAssembler:
         # 收束成一份统一输入，避免调用方各自手拼消息顺序。
         built = self._context_builder._build_system_prompt_result(
             skill_names=skill_names,
+            session_key=session_key,
             channel=channel,
             chat_id=chat_id,
             retrieved_memory_block=retrieved_memory_block,
