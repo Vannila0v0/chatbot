@@ -373,7 +373,9 @@ def _build_loop_deps(
         memory_runtime.markdown.store,
     )
     if isinstance(context, ContextBuilder):
-        context.set_memory_resolver(memory_runtime.markdown.resolver)
+        context.set_memory_resolver(
+            getattr(memory_runtime.markdown, "resolver", None)
+        )
         context.set_media_capabilities(
             multimodal=bool(getattr(config, "multimodal", True)),
             vl_available=bool(getattr(config, "vl_model", "")),

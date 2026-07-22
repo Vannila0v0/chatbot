@@ -152,7 +152,7 @@ class AgentLoop:
             multimodal=config.llm.multimodal,
             vl_available=config.llm.vl_available,
             memory_resolver=(
-                markdown_memory.resolver
+                getattr(markdown_memory, "resolver", None)
                 if markdown_memory is not None
                 else None
             ),

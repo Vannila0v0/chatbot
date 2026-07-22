@@ -650,6 +650,12 @@ class DefaultMemoryEngine:
     def _on_turn_committed(self, event: TurnCommitted) -> None:
         if bool((event.extra or {}).get("skip_post_memory")):
             return
+        if event.channel == "web" or event.session_key.startswith("web:"):
+            logger.info(
+                "Web post-response memory skipped until tenant vector scope is available: %s",
+                event.session_key,
+            )
+            return
         if self._event_bus is None:
             return
         source_ref = f"{event.session_key}@post_response"
