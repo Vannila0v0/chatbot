@@ -201,3 +201,19 @@ def test_parser_ignores_non_web_sessions_and_normalizes_uuid() -> None:
     assert scope is not None
     assert scope.user_id == USER_A
     assert scope.conversation_id == "primary"
+
+
+def test_pending_discovery_ignores_invalid_and_empty_tenant_directories(
+    tmp_path: Path,
+) -> None:
+    resolver = MarkdownMemoryStoreResolver(tmp_path)
+    store_a = resolver.store_for(f"web:{USER_A}:primary")
+    _ = resolver.store_for(f"web:{USER_B}:primary")
+    store_a.append_pending("- [preference] pending-a")
+    invalid = tmp_path / "web_users" / "not-a-uuid" / "memory"
+    invalid.mkdir(parents=True)
+    (invalid / "PENDING.md").write_text("should-not-load", encoding="utf-8")
+
+    candidates = resolver.iter_web_stores_with_pending()
+
+    assert [scope.user_id for scope, _ in candidates] == [USER_A]

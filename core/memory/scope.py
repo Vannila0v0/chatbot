@@ -76,6 +76,52 @@ class MarkdownMemoryStoreResolver:
             self._web_stores[scope.user_id] = store
             return store
 
+    def iter_web_stores_with_pending(
+        self,
+    ) -> list[tuple[WebMemoryScope, MarkdownMemoryStore]]:
+        if not self._web_users_root.is_dir():
+            return []
+
+        candidates: list[tuple[float, WebMemoryScope]] = []
+        for child in self._web_users_root.iterdir():
+            try:
+                normalized_user_id = str(UUID(child.name))
+                if child.name != normalized_user_id:
+                    continue
+                resolved_child = child.resolve()
+                if (
+                    resolved_child.parent != self._web_users_root
+                    or not child.is_dir()
+                ):
+                    continue
+
+                pending_path = child / "memory" / "PENDING.md"
+                snapshot_path = child / "memory" / "PENDING.snapshot.md"
+                existing = [
+                    path
+                    for path in (pending_path, snapshot_path)
+                    if path.is_file()
+                ]
+                if not existing:
+                    continue
+                oldest_mtime = min(path.stat().st_mtime for path in existing)
+            except (OSError, ValueError):
+                continue
+            candidates.append(
+                (
+                    oldest_mtime,
+                    WebMemoryScope(user_id=normalized_user_id),
+                )
+            )
+
+        stores: list[tuple[WebMemoryScope, MarkdownMemoryStore]] = []
+        ordered = sorted(candidates, key=lambda item: (item[0], item[1].user_id))
+        for _, scope in ordered:
+            store = self.store_for(f"web:{scope.user_id}:{scope.conversation_id}")
+            if store.read_pending().strip():
+                stores.append((scope, store))
+        return stores
+
     @staticmethod
     def _initialize_web_store(store: MarkdownMemoryStore) -> None:
         for path in (
