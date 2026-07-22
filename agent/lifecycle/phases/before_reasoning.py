@@ -111,6 +111,7 @@ class _PromptWarmupModule:
             ContextRequest(
                 history=[],
                 current_message="",
+                session_key=ctx.session_key,
                 skill_names=ctx.skill_names,
                 channel=ctx.channel,
                 chat_id=ctx.chat_id,

@@ -22,6 +22,7 @@ from core.memory.events import ConsolidationCommitted
 
 if TYPE_CHECKING:
     from bus.event_bus import EventBus
+    from core.memory.scope import MarkdownMemoryStoreResolver
 
 logger = logging.getLogger("memory.markdown")
 
@@ -921,6 +922,7 @@ class MarkdownMemoryStore(MemoryStore):
 class MarkdownMemoryRuntime:
     store: MarkdownMemoryStore
     maintenance: "MarkdownMemoryMaintenance"
+    resolver: "MarkdownMemoryStoreResolver"
 
 
 class MarkdownMemoryMaintenance:
@@ -1127,7 +1129,10 @@ def build_markdown_memory_runtime(
     recent_context_provider: "LLMProvider | None" = None,
     recent_context_model: str | None = None,
 ) -> MarkdownMemoryRuntime:
+    from core.memory.scope import MarkdownMemoryStoreResolver
+
     store = MarkdownMemoryStore(workspace)
+    resolver = MarkdownMemoryStoreResolver(workspace, default_store=store)
     maintenance = MarkdownMemoryMaintenance(
         store=store,
         provider=provider,
@@ -1137,4 +1142,8 @@ def build_markdown_memory_runtime(
         recent_context_provider=recent_context_provider,
         recent_context_model=recent_context_model,
     )
-    return MarkdownMemoryRuntime(store=store, maintenance=maintenance)
+    return MarkdownMemoryRuntime(
+        store=store,
+        maintenance=maintenance,
+        resolver=resolver,
+    )

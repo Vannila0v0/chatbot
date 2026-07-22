@@ -41,6 +41,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger("agent.context")
 
 
+class MemoryProfileResolver(Protocol):
+    def store_for(self, session_key: str) -> "MemoryProfileApi": ...
+
+
 class ChannelPolicy(Protocol):
     channel: str
 
@@ -221,10 +225,12 @@ class ContextBuilder:
         *,
         multimodal: bool = True,
         vl_available: bool = False,
+        memory_resolver: "MemoryProfileResolver | None" = None,
     ):
         self.workspace = workspace
         self.skills = SkillsLoader(workspace)
         self.memory = memory
+        self._memory_resolver = memory_resolver
         self._system_prompt_builder = SystemPromptBuilder(
             [
                 IdentityPromptBlock(render_fn=build_agent_static_identity_prompt),
@@ -260,6 +266,12 @@ class ContextBuilder:
             vl_available=vl_available,
         )
 
+    def set_memory_resolver(
+        self,
+        resolver: "MemoryProfileResolver | None",
+    ) -> None:
+        self._memory_resolver = resolver
+
     @property
     def last_debug_breakdown(self) -> list[PromptSectionMeta]:
         return list(self._last_debug_breakdown)
@@ -294,6 +306,7 @@ class ContextBuilder:
         assembled = self._assembler.assemble(
             history=request.history,
             current_message=request.current_message,
+            session_key=request.session_key,
             media=request.media,
             skill_names=request.skill_names,
             channel=request.channel,
@@ -319,14 +332,25 @@ class ContextBuilder:
     def _build_system_prompt_result(
         self,
         skill_names: list[str] | None = None,
+        session_key: str | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
         retrieved_memory_block: str = "",
         disabled_sections: set[str] | None = None,
     ) -> SystemPromptBuildResult:
+        memory = self.memory
+        if self._memory_resolver is not None:
+            if channel == "web" and not session_key:
+                raise ValueError("Web prompt rendering requires a session key")
+            if channel == "web" and not session_key.startswith("web:"):
+                raise ValueError("Web prompt rendering requires a Web session key")
+            if channel != "web" and session_key and session_key.startswith("web:"):
+                raise ValueError("Web session key requires the Web channel")
+            if session_key:
+                memory = self._memory_resolver.store_for(session_key)
         ctx = TurnContext(
             workspace=self.workspace,
-            memory=self.memory,
+            memory=memory,
             skills=self.skills,
             skill_names=skill_names or [],
             channel=channel,

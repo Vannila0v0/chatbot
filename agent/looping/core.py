@@ -151,6 +151,11 @@ class AgentLoop:
             memory=memory_profile,
             multimodal=config.llm.multimodal,
             vl_available=config.llm.vl_available,
+            memory_resolver=(
+                markdown_memory.resolver
+                if markdown_memory is not None
+                else None
+            ),
         )
         self._llm_services = deps.llm_services or LLMServices(
             provider=deps.provider,

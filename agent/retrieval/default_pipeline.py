@@ -24,6 +24,15 @@ class DefaultMemoryRetrievalPipeline(MemoryRetrievalPipeline):
 
     # 被动预检索入口：只转换请求形状，检索语义统一交给 MemoryEngine。
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+        # Web Markdown is tenant-scoped before the vector engine is. Until the
+        # vector layer receives the same scope, querying it could leak memories.
+        if request.channel == "web":
+            return RetrievalResult(
+                block="",
+                trace=None,
+                metadata={"disabled_reason": "web_vector_scope_pending"},
+            )
+
         # 1. 没有启用记忆引擎时，主链继续无记忆回复。
         if self._memory.engine is None:
             return RetrievalResult(block="", trace=None)
