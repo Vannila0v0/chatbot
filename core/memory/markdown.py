@@ -1133,20 +1133,16 @@ class MarkdownMemoryMaintenance:
         else:
             session.last_consolidated = draft.window.consolidate_up_to
         session_key = str(getattr(session, "key", "") or "")
-        if self._event_bus is not None and not session_key.startswith("web:"):
+        if self._event_bus is not None:
             await self._event_bus.emit(
                 ConsolidationCommitted(
+                    session_key=session_key,
                     history_entry_payloads=list(draft.history_entry_payloads),
                     source_ref=draft.source_ref,
                     scope_channel=draft.scope_channel,
                     scope_chat_id=draft.scope_chat_id,
                     conversation=draft.conversation,
                 )
-            )
-        elif self._event_bus is not None:
-            logger.info(
-                "Web vector bridge skipped until tenant vector scope is available: %s",
-                session_key,
             )
 
     async def refresh_recent_turns(

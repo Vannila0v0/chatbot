@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict, cast
@@ -31,6 +32,7 @@ from core.memory.engine import (
     MemoryToolSpec,
 )
 from core.memory.events import ConsolidationCommitted, TurnIngested
+from core.memory.scope import InvalidMemoryScopeError, parse_web_memory_scope
 from core.memory.utils import (
     evidence_from_source_ref,
     resolve_memory_scope,
@@ -58,6 +60,13 @@ _HYPOTHESIS_TIMEOUT_S = 3.0
 _VECTOR_SCORE_THRESHOLD = 0.35
 _VECTOR_TOP_K = 15
 _ChatCall = Callable[..., Awaitable[LLMResponse]]
+
+
+@dataclass(frozen=True)
+class _WebMemoryServices:
+    memorizer: Memorizer
+    retriever: Retriever
+    post_response_worker: PostResponseMemoryWorker
 
 
 def _build_entry_source_ref(base_source_ref: str, entry: str) -> str:
@@ -565,6 +574,7 @@ class DefaultMemoryEngine:
         self._retriever: Retriever | None = None
         self._tagger: ProcedureTagger | None = None
         self._post_response_worker: PostResponseMemoryWorker | None = None
+        self._web_memory_services: dict[str, _WebMemoryServices] = {}
         self._event_bus = event_publisher
         self.closeables: list[object] = []
 
@@ -573,7 +583,6 @@ class DefaultMemoryEngine:
             default_config=default_config,
         )
         embedding = config.memory.embedding
-        retrieval = default_config.retrieval
         self._store_resolver = MemoryStore2Resolver(
             workspace,
             default_db_path=db_path,
@@ -591,8 +600,31 @@ class DefaultMemoryEngine:
             requester=http_resources.external_default,
         )
         self._memorizer = Memorizer(self._v2_store, self._embedder)
-        self._retriever = Retriever(
-            self._v2_store,
+        self._retriever = self._build_retriever(self._v2_store)
+        skills_loader = SkillsLoader(workspace)
+        self._tagger = ProcedureTagger(
+            provider=self._light_provider,
+            model=self._light_model,
+            skills_fn=lambda: [
+                s["name"] for s in skills_loader.list_skills(filter_unavailable=False)
+            ],
+        )
+        self._post_response_worker = PostResponseMemoryWorker(
+            memorizer=self._memorizer,
+            retriever=self._retriever,
+            light_provider=self._light_provider,
+            light_model=self._light_model,
+            event_publisher=event_publisher,
+        )
+        self._wire_memory2_events()
+        self.closeables = [self._store_resolver, self._embedder]
+
+    def _build_retriever(self, store: MemoryStore2) -> Retriever:
+        if self._embedder is None:
+            raise RuntimeError("memory embedder unavailable")
+        retrieval = self._default_config.retrieval
+        return Retriever(
+            store,
             self._embedder,
             top_k=retrieval.top_k_history,
             score_threshold=retrieval.score_threshold,
@@ -611,23 +643,66 @@ class DefaultMemoryEngine:
             procedure_guard_enabled=retrieval.procedure_guard_enabled,
             hotness_alpha=0.20,
         )
-        skills_loader = SkillsLoader(workspace)
-        self._tagger = ProcedureTagger(
-            provider=self._light_provider,
-            model=self._light_model,
-            skills_fn=lambda: [
-                s["name"] for s in skills_loader.list_skills(filter_unavailable=False)
-            ],
+
+    @staticmethod
+    def _validate_routed_scope(
+        session_key: str,
+        channel: str,
+        chat_id: str,
+    ) -> None:
+        is_web_channel = channel == "web"
+        is_web_session = session_key.startswith("web:")
+        if is_web_channel != is_web_session:
+            raise InvalidMemoryScopeError("Web channel and session key do not match")
+        if not is_web_session:
+            return
+
+        scope = parse_web_memory_scope(session_key)
+        if scope is None or (chat_id and chat_id != scope.conversation_id):
+            raise InvalidMemoryScopeError("Web chat and session key do not match")
+
+    def _web_services_for_session(self, session_key: str) -> _WebMemoryServices:
+        scope = parse_web_memory_scope(session_key)
+        if scope is None:
+            raise InvalidMemoryScopeError("Web memory services require a Web session")
+
+        cached = self._web_memory_services.get(scope.user_id)
+        if cached is not None:
+            return cached
+        if self._store_resolver is None:
+            raise RuntimeError("memory store resolver unavailable")
+        if self._embedder is None:
+            raise RuntimeError("memory embedder unavailable")
+
+        store = self._store_resolver.store_for(session_key)
+        memorizer = Memorizer(store, self._embedder)
+        retriever = self._build_retriever(store)
+        services = _WebMemoryServices(
+            memorizer=memorizer,
+            retriever=retriever,
+            post_response_worker=PostResponseMemoryWorker(
+                memorizer=memorizer,
+                retriever=retriever,
+                light_provider=self._light_provider,
+                light_model=self._light_model,
+                event_publisher=self._event_bus,
+            ),
         )
-        self._post_response_worker = PostResponseMemoryWorker(
-            memorizer=self._memorizer,
-            retriever=self._retriever,
-            light_provider=self._light_provider,
-            light_model=self._light_model,
-            event_publisher=event_publisher,
-        )
-        self._wire_memory2_events()
-        self.closeables = [self._store_resolver, self._embedder]
+        self._web_memory_services[scope.user_id] = services
+        return services
+
+    def _memorizer_for_session(self, session_key: str) -> Memorizer | None:
+        if session_key.startswith("web:"):
+            return self._web_services_for_session(session_key).memorizer
+        return self._memorizer
+
+    def _post_response_worker_for_session(
+        self,
+        session_key: str,
+    ) -> PostResponseMemoryWorker | None:
+        if session_key.startswith("web:"):
+            return self._web_services_for_session(session_key).post_response_worker
+        return self._post_response_worker
 
     @classmethod
     def ensure_workspace_storage(
@@ -648,7 +723,7 @@ class DefaultMemoryEngine:
             return
         if self._post_response_worker is not None:
             self._event_bus.on(TurnCommitted, self._on_turn_committed)
-            self._event_bus.on(TurnIngested, self._post_response_worker.handle)
+            self._event_bus.on(TurnIngested, self._on_turn_ingested)
         if self._memorizer is not None:
             self._event_bus.on(ConsolidationCommitted, self._on_consolidation_committed)
 
@@ -656,12 +731,7 @@ class DefaultMemoryEngine:
     def _on_turn_committed(self, event: TurnCommitted) -> None:
         if bool((event.extra or {}).get("skip_post_memory")):
             return
-        if event.channel == "web" or event.session_key.startswith("web:"):
-            logger.info(
-                "Web post-response memory skipped until tenant vector scope is available: %s",
-                event.session_key,
-            )
-            return
+        self._validate_routed_scope(event.session_key, event.channel, event.chat_id)
         if self._event_bus is None:
             return
         source_ref = f"{event.session_key}@post_response"
@@ -677,12 +747,27 @@ class DefaultMemoryEngine:
             )
         )
 
+    async def _on_turn_ingested(self, event: TurnIngested) -> None:
+        self._validate_routed_scope(event.session_key, event.channel, event.chat_id)
+        worker = self._post_response_worker_for_session(event.session_key)
+        if worker is not None:
+            await worker.handle(event)
+
     async def _on_consolidation_committed(
         self,
         event: ConsolidationCommitted,
     ) -> None:
+        self._validate_routed_scope(
+            event.session_key,
+            event.scope_channel,
+            event.scope_chat_id,
+        )
+        memorizer = self._memorizer_for_session(event.session_key)
+        if memorizer is None:
+            return
         save_coros = [
             self._save_from_consolidation(
+                memorizer=memorizer,
                 history_entry=entry,
                 behavior_updates=[],
                 source_ref=_build_entry_source_ref(event.source_ref, entry),
@@ -701,6 +786,7 @@ class DefaultMemoryEngine:
         if implicit_result:
             await self._save_implicit_long_term(
                 implicit_result,
+                memorizer=memorizer,
                 source_ref=event.source_ref,
                 scope_channel=event.scope_channel,
                 scope_chat_id=event.scope_chat_id,
@@ -797,7 +883,9 @@ class DefaultMemoryEngine:
     # post-response 摄入入口：外部只提交对话内容，失效判断仍在 engine 内部完成。
     async def ingest(self, request: MemoryIngestRequest) -> MemoryIngestResult:
         scope = resolve_memory_scope(request.scope)
-        if self._post_response_worker is None:
+        self._validate_routed_scope(scope.session_key, scope.channel, scope.chat_id)
+        worker = self._post_response_worker_for_session(scope.session_key)
+        if worker is None:
             return MemoryIngestResult(
                 accepted=False,
                 summary="post_response_worker unavailable",
@@ -817,7 +905,7 @@ class DefaultMemoryEngine:
                 raw={"reason": "invalid_content"},
             )
 
-        await self._post_response_worker.run(
+        await worker.run(
             user_msg=normalized["user_message"],
             agent_response=normalized["assistant_response"],
             tool_chain=normalized["tool_chain"],
@@ -1034,6 +1122,7 @@ class DefaultMemoryEngine:
 
     async def _save_from_consolidation(
         self,
+        memorizer: Memorizer,
         history_entry: str,
         behavior_updates: list[dict[str, object]],
         source_ref: str,
@@ -1041,9 +1130,7 @@ class DefaultMemoryEngine:
         scope_chat_id: str,
         emotional_weight: int = 0,
     ) -> None:
-        if self._memorizer is None:
-            return
-        await self._memorizer.save_from_consolidation(
+        await memorizer.save_from_consolidation(
             history_entry=history_entry,
             behavior_updates=behavior_updates,
             source_ref=source_ref,
@@ -1054,6 +1141,7 @@ class DefaultMemoryEngine:
 
     async def _save_item_with_supersede(
         self,
+        memorizer: Memorizer,
         summary: str,
         memory_type: str,
         extra: dict[str, object],
@@ -1061,9 +1149,7 @@ class DefaultMemoryEngine:
         happened_at: str | None = None,
         emotional_weight: int = 0,
     ) -> str:
-        if self._memorizer is None:
-            return ""
-        return await self._memorizer.save_item_with_supersede(
+        return await memorizer.save_item_with_supersede(
             summary=summary,
             memory_type=memory_type,
             extra=extra,
@@ -1076,6 +1162,7 @@ class DefaultMemoryEngine:
         self,
         result: dict[str, object],
         *,
+        memorizer: Memorizer,
         source_ref: str,
         scope_channel: str,
         scope_chat_id: str,
@@ -1091,6 +1178,7 @@ class DefaultMemoryEngine:
             raw_happened_at = item.get("happened_at")
             happened_at = raw_happened_at if isinstance(raw_happened_at, str) else None
             await self._save_item_with_supersede(
+                memorizer=memorizer,
                 summary=summary,
                 memory_type="profile",
                 extra={
@@ -1124,6 +1212,7 @@ class DefaultMemoryEngine:
                 ):
                     extra["rule_schema"] = item["rule_schema"]
                 await self._save_item_with_supersede(
+                    memorizer=memorizer,
                     summary=summary,
                     memory_type=memory_type,
                     extra=extra,
