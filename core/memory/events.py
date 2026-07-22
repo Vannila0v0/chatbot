@@ -65,6 +65,7 @@ class TurnIngested:
 
 @dataclass(frozen=True)
 class ConsolidationCommitted:
+    session_key: str
     history_entry_payloads: list[tuple[str, int]]
     source_ref: str
     scope_channel: str

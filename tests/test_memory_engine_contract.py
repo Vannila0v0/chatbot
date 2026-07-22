@@ -51,12 +51,14 @@ def _make_default_engine(
     engine._provider = provider
     engine._light_provider = None
     engine._light_model = ""
+    engine._store_resolver = None
     engine._v2_store = None
     engine._embedder = None
     engine._memorizer = memorizer
     engine._retriever = retriever
     engine._tagger = tagger
     engine._post_response_worker = post_response_worker
+    engine._web_memory_services = {}
     engine._event_bus = event_publisher
     engine.closeables = []
     engine._wire_memory2_events()
@@ -292,18 +294,24 @@ async def test_default_memory_engine_respects_skip_post_memory_event_flag():
     await event_bus.aclose()
 
 
-async def test_default_memory_engine_skips_unscoped_web_post_response():
+async def test_default_memory_engine_routes_web_post_response_to_tenant_worker():
     event_bus = EventBus()
-    worker = SimpleNamespace(run=AsyncMock(), handle=AsyncMock())
-    _ = _make_default_engine(
+    personal_worker = SimpleNamespace(run=AsyncMock(), handle=AsyncMock())
+    web_worker = SimpleNamespace(run=AsyncMock(), handle=AsyncMock())
+    engine = _make_default_engine(
         retriever=cast(Any, SimpleNamespace()),
-        post_response_worker=cast(Any, worker),
+        post_response_worker=cast(Any, personal_worker),
         event_publisher=event_bus,
+    )
+    user_id = "550e8400-e29b-41d4-a716-446655440000"
+    engine._web_memory_services[user_id] = cast(
+        Any,
+        SimpleNamespace(post_response_worker=web_worker),
     )
 
     event_bus.enqueue(
         TurnCommitted(
-            session_key="web:550e8400-e29b-41d4-a716-446655440000:primary",
+            session_key=f"web:{user_id}:primary",
             channel="web",
             chat_id="primary",
             input_message="这条旧偏好是错的",
@@ -314,7 +322,8 @@ async def test_default_memory_engine_skips_unscoped_web_post_response():
     )
     await event_bus.drain()
 
-    worker.handle.assert_not_awaited()
+    web_worker.handle.assert_awaited_once()
+    personal_worker.handle.assert_not_awaited()
     await event_bus.aclose()
 
 
@@ -603,6 +612,7 @@ async def test_default_memory_engine_consumes_markdown_consolidation_event():
 
     await engine._on_consolidation_committed(
         ConsolidationCommitted(
+            session_key="cli:1",
             history_entry_payloads=[("[2026-03-15 10:00] 用户聊了 Zigbee", 6)],
             source_ref='["m1"]',
             scope_channel="cli",
@@ -631,6 +641,7 @@ async def test_default_memory_engine_reports_implicit_extraction_failure():
     with pytest.raises(RuntimeError, match="long_term extraction failed"):
         await engine._on_consolidation_committed(
             ConsolidationCommitted(
+                session_key="cli:1",
                 history_entry_payloads=[("[2026-03-15 10:00] 用户聊了 Zigbee", 6)],
                 source_ref='["m1"]',
                 scope_channel="cli",

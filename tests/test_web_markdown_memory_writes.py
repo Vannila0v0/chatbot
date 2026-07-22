@@ -176,7 +176,9 @@ async def test_web_consolidation_reads_and_writes_only_tenant_store(
     assert default_store.read_history() == ""
     assert default_store.read_pending() == ""
     assert session_a.last_consolidated == 2
-    assert vector_events == []
+    assert len(vector_events) == 2
+    assert {event.session_key for event in vector_events} == {key_a}
+    assert {event.scope_channel for event in vector_events} == {"web"}
     await event_bus.aclose()
 
 
@@ -216,6 +218,7 @@ async def test_non_web_consolidation_keeps_personal_store_and_vector_event(
     assert prepare_call.kwargs["profile_maint"] is default_store
     assert "PERSONAL-EVENT" in default_store.read_history()
     assert len(vector_events) == 1
+    assert vector_events[0].session_key == "telegram:123"
     assert vector_events[0].scope_channel == "telegram"
     assert resolver.store_for("telegram:123") is default_store
     await event_bus.aclose()
