@@ -46,6 +46,7 @@ from memory2.retriever import Retriever
 from memory2.rule_schema import build_procedure_rule_schema
 from memory2.store import MemoryStore2
 from plugins.default_memory.config import DefaultMemoryConfig, resolve_memory_db_path
+from plugins.default_memory.store_resolver import MemoryStore2Resolver
 
 if TYPE_CHECKING:
     from bus.event_bus import EventBus
@@ -557,6 +558,7 @@ class DefaultMemoryEngine:
         self._provider = provider
         self._light_provider = light_provider or provider
         self._light_model = config.light_model or config.model
+        self._store_resolver: MemoryStore2Resolver | None = None
         self._v2_store: MemoryStore2 | None = None
         self._embedder: Embedder | None = None
         self._memorizer: Memorizer | None = None
@@ -572,7 +574,11 @@ class DefaultMemoryEngine:
         )
         embedding = config.memory.embedding
         retrieval = default_config.retrieval
-        self._v2_store = MemoryStore2(db_path)
+        self._store_resolver = MemoryStore2Resolver(
+            workspace,
+            default_db_path=db_path,
+        )
+        self._v2_store = self._store_resolver.default_store
         self._embedder = Embedder(
             base_url=embedding.base_url
             or config.light_base_url
@@ -621,7 +627,7 @@ class DefaultMemoryEngine:
             event_publisher=event_publisher,
         )
         self._wire_memory2_events()
-        self.closeables = [self._v2_store, self._embedder]
+        self.closeables = [self._store_resolver, self._embedder]
 
     @classmethod
     def ensure_workspace_storage(
