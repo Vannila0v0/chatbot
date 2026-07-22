@@ -8,6 +8,7 @@ from agent.core.types import ContextRequest
 from agent.looping.ports import MemoryServices
 from agent.retrieval.default_pipeline import DefaultMemoryRetrievalPipeline
 from agent.retrieval.protocol import RetrievalRequest
+from core.memory.engine import MemoryQuery, MemoryQueryResult, MemoryScope
 from core.memory.scope import (
     InvalidMemoryScopeError,
     MarkdownMemoryStoreResolver,
@@ -146,13 +147,16 @@ def test_context_builder_rejects_channel_session_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_web_retrieval_does_not_query_unscoped_vector_engine() -> None:
-    class _UnexpectedEngine:
-        async def query(self, request: object) -> object:
-            raise AssertionError(f"unexpected vector query: {request!r}")
+async def test_web_retrieval_forwards_tenant_scope_to_vector_engine() -> None:
+    requests: list[object] = []
+
+    class _ScopedEngine:
+        async def query(self, request: object) -> MemoryQueryResult:
+            requests.append(request)
+            return MemoryQueryResult(text_block="tenant memory")
 
     pipeline = DefaultMemoryRetrievalPipeline(
-        memory=MemoryServices(engine=_UnexpectedEngine()),  # type: ignore[arg-type]
+        memory=MemoryServices(engine=_ScopedEngine()),  # type: ignore[arg-type]
     )
 
     result = await pipeline.retrieve(
@@ -166,9 +170,15 @@ async def test_web_retrieval_does_not_query_unscoped_vector_engine() -> None:
         )
     )
 
-    assert result.block == ""
-    assert result.trace is None
-    assert result.metadata == {"disabled_reason": "web_vector_scope_pending"}
+    assert result.block == "tenant memory"
+    assert len(requests) == 1
+    request = requests[0]
+    assert isinstance(request, MemoryQuery)
+    assert request.scope == MemoryScope(
+        session_key=f"web:{USER_A}:primary",
+        channel="web",
+        chat_id="primary",
+    )
 
 
 @pytest.mark.parametrize(

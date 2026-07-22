@@ -696,6 +696,18 @@ class DefaultMemoryEngine:
             return self._web_services_for_session(session_key).memorizer
         return self._memorizer
 
+    def _retriever_for_session(self, session_key: str) -> Retriever | None:
+        if session_key.startswith("web:"):
+            return self._web_services_for_session(session_key).retriever
+        return self._retriever
+
+    def _store_for_session(self, session_key: str) -> MemoryStore2 | None:
+        if session_key.startswith("web:"):
+            if self._store_resolver is None:
+                raise RuntimeError("memory store resolver unavailable")
+            return self._store_resolver.store_for(session_key)
+        return self._v2_store
+
     def _post_response_worker_for_session(
         self,
         session_key: str,
@@ -836,25 +848,33 @@ class DefaultMemoryEngine:
         self,
         request: MemoryQuery,
     ) -> MemoryQueryResult:
-        if self._retriever is None:
-            return MemoryQueryResult(raw={"items": []})
+        scope = resolve_memory_scope(request.scope)
+        self._validate_routed_scope(scope.session_key, scope.channel, scope.chat_id)
         if request.intent == "timeline":
-            return self._query_timeline(request)
-        if request.intent == "interest":
-            return await self._query_interest(request)
-        if request.intent in {"context", "procedure"}:
-            return await self._query_context(request)
-        return await self._query_answer(request)
+            store = self._store_for_session(scope.session_key)
+            return self._query_timeline(request, store=store)
 
-    async def _query_context(self, request: MemoryQuery) -> MemoryQueryResult:
-        retriever = self._retriever
+        retriever = self._retriever_for_session(scope.session_key)
         if retriever is None:
             return MemoryQueryResult(raw={"items": []})
+        if request.intent == "interest":
+            return await self._query_interest(request, retriever=retriever)
+        if request.intent in {"context", "procedure"}:
+            return await self._query_context(request, retriever=retriever)
+        return await self._query_answer(request, retriever=retriever)
+
+    async def _query_context(
+        self,
+        request: MemoryQuery,
+        *,
+        retriever: Retriever,
+    ) -> MemoryQueryResult:
         scope = resolve_memory_scope(request.scope)
         queries = self._resolve_queries(request)
         memory_types = self._resolve_memory_types(request)
         items = await self._retrieve_related(
             request.text,
+            retriever=retriever,
             memory_types=memory_types,
             top_k=request.limit,
             scope_channel=scope.channel or None,
@@ -1232,6 +1252,8 @@ class DefaultMemoryEngine:
     async def _query_answer(
         self,
         request: MemoryQuery,
+        *,
+        retriever: Retriever,
     ) -> MemoryQueryResult:
         hyp1_task = asyncio.create_task(self._gen_hypothesis(request.text, style="event"))
         hyp2_task = asyncio.create_task(self._gen_hypothesis(request.text, style="general"))
@@ -1241,6 +1263,7 @@ class DefaultMemoryEngine:
         types = self._resolve_memory_types(request)
         hits = await self._retrieve_related(
             request.text,
+            retriever=retriever,
             memory_types=types,
             top_k=max(request.limit, _VECTOR_TOP_K),
             scope_channel=scope.channel or None,
@@ -1267,15 +1290,21 @@ class DefaultMemoryEngine:
     def _query_timeline(
         self,
         request: MemoryQuery,
+        *,
+        store: MemoryStore2 | None,
     ) -> MemoryQueryResult:
         if request.filters.time_start is None or request.filters.time_end is None:
             return MemoryQueryResult(
                 trace={"source": self.DESCRIPTOR.name, "intent": "timeline_missing_time"}
             )
-        hits = self.list_events_by_time_range(
-            request.filters.time_start,
-            request.filters.time_end,
-            limit=request.limit,
+        hits = (
+            store.list_events_by_time_range(
+                request.filters.time_start,
+                request.filters.time_end,
+                limit=request.limit,
+            )
+            if store is not None
+            else []
         )
         return MemoryQueryResult(
             records=[self._build_record(item) for item in hits if isinstance(item, dict)],
@@ -1286,10 +1315,13 @@ class DefaultMemoryEngine:
     async def _query_interest(
         self,
         request: MemoryQuery,
+        *,
+        retriever: Retriever,
     ) -> MemoryQueryResult:
         scope = resolve_memory_scope(request.scope)
         hits = await self._retrieve_related(
             request.text,
+            retriever=retriever,
             memory_types=["preference", "profile"],
             top_k=request.limit,
             scope_channel=scope.channel or None,
@@ -1309,6 +1341,7 @@ class DefaultMemoryEngine:
         self,
         query: str,
         *,
+        retriever: Retriever,
         memory_types: list[str] | None = None,
         top_k: int | None = None,
         scope_channel: str | None = None,
@@ -1320,9 +1353,6 @@ class DefaultMemoryEngine:
         time_end: datetime | None = None,
         keyword_enabled: bool = True,
     ) -> list[dict[str, object]]:
-        retriever = self._retriever
-        if retriever is None:
-            return []
         return cast(
             list[dict[str, object]],
             await retriever.retrieve(
