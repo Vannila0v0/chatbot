@@ -182,6 +182,11 @@ class AppRuntime:
                 self.config,
                 provider=self.provider,
                 memory_store=self.memory_runtime.markdown.store,
+                memory_resolver=getattr(
+                    self.memory_runtime.markdown,
+                    "resolver",
+                    None,
+                ),
             )
             self.tasks.extend(optimizer_tasks)
             self.dashboard_server = build_dashboard_server(

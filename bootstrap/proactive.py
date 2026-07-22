@@ -9,7 +9,12 @@ from agent.provider import LLMProvider
 from agent.tool_hooks import ToolHook
 from agent.tools.message_push import MessagePushTool
 from proactive_v2.loop import ProactiveLoop
-from proactive_v2.memory_optimizer import MemoryOptimizer, MemoryOptimizerLoop
+from proactive_v2.memory_optimizer import (
+    MemoryOptimizer,
+    MemoryOptimizerGroup,
+    MemoryOptimizerLoop,
+    WebMemoryOptimizerCoordinator,
+)
 from proactive_v2.presence import PresenceStore
 from proactive_v2.state import ProactiveStateStore
 from session.manager import SessionManager
@@ -18,6 +23,7 @@ if TYPE_CHECKING:
     from core.memory.engine import MemoryEngine
     from core.memory.markdown import MarkdownMemoryStore
     from core.memory.runtime import MemoryRuntime
+    from core.memory.scope import MarkdownMemoryStoreResolver
 
 
 def _build_proactive_provider(config: Config, provider: LLMProvider) -> LLMProvider:
@@ -95,6 +101,7 @@ def build_memory_optimizer_task(
     *,
     provider: LLMProvider,
     memory_store: "MarkdownMemoryStore",
+    memory_resolver: "MarkdownMemoryStoreResolver | None" = None,
 ) -> tuple[list, "MemoryOptimizer | None"]:
     if not config.memory_optimizer_enabled:
         print("MemoryOptimizerLoop 已禁用（memory_optimizer_enabled=false）")
@@ -105,6 +112,24 @@ def build_memory_optimizer_task(
         provider=provider,
         model=config.model,
     )
+    scheduled_optimizer = mem_optimizer
+    if memory_resolver is not None:
+        web_optimizer = WebMemoryOptimizerCoordinator(
+            resolver=memory_resolver,
+            provider=provider,
+            model=config.model,
+        )
+        scheduled_optimizer = MemoryOptimizerGroup(
+            [
+                ("personal", mem_optimizer),
+                ("web", web_optimizer),
+            ]
+        )
     interval = config.memory_optimizer_interval_seconds
     print(f"MemoryOptimizerLoop 已启动，间隔={interval}s ({interval / 3600:.1f}h)")
-    return [MemoryOptimizerLoop(mem_optimizer, interval_seconds=interval).run()], mem_optimizer
+    return [
+        MemoryOptimizerLoop(
+            scheduled_optimizer,
+            interval_seconds=interval,
+        ).run()
+    ], mem_optimizer

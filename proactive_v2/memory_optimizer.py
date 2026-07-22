@@ -11,10 +11,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Protocol
 
 if TYPE_CHECKING:
     from core.memory.markdown import MarkdownMemoryStore
+    from core.memory.scope import MarkdownMemoryStoreResolver
 
 from agent.memory import DEFAULT_SELF_MD
 from agent.provider import LLMProvider
@@ -24,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 class MemoryOptimizerBusy(RuntimeError):
     pass
+
+
+class MemoryOptimizerApi(Protocol):
+    async def optimize(self) -> None: ...
 
 
 # ── Prompts ──────────────────────────────────────────────────────
@@ -320,6 +325,98 @@ class MemoryOptimizer:
         return (resp.content or "").strip()
 
 
+class WebMemoryOptimizerCoordinator:
+    def __init__(
+        self,
+        *,
+        resolver: "MarkdownMemoryStoreResolver",
+        provider: LLMProvider,
+        model: str,
+        max_concurrency: int = 2,
+    ) -> None:
+        self._resolver = resolver
+        self._provider = provider
+        self._model = model
+        self._max_concurrency = max(1, int(max_concurrency))
+        self._optimizers: dict[str, MemoryOptimizer] = {}
+        self._lock = asyncio.Lock()
+
+    @property
+    def is_running(self) -> bool:
+        return self._lock.locked()
+
+    async def optimize(self) -> None:
+        if self._lock.locked():
+            raise MemoryOptimizerBusy("Web memory optimizer 正在运行")
+        async with self._lock:
+            candidates = await asyncio.to_thread(
+                self._resolver.iter_web_stores_with_pending
+            )
+            if not candidates:
+                logger.info("[web_memory_optimizer] 没有待归档租户")
+                return
+            logger.info(
+                "[web_memory_optimizer] 开始处理 tenants=%d concurrency=%d",
+                len(candidates),
+                self._max_concurrency,
+            )
+            semaphore = asyncio.Semaphore(self._max_concurrency)
+            await asyncio.gather(
+                *(
+                    self._optimize_tenant(scope.user_id, store, semaphore)
+                    for scope, store in candidates
+                )
+            )
+
+    async def _optimize_tenant(
+        self,
+        user_id: str,
+        store: "MarkdownMemoryStore",
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        async with semaphore:
+            optimizer = self._optimizers.get(user_id)
+            if optimizer is None:
+                optimizer = MemoryOptimizer(
+                    memory=store,
+                    provider=self._provider,
+                    model=self._model,
+                )
+                self._optimizers[user_id] = optimizer
+            try:
+                await optimizer.optimize()
+                logger.info(
+                    "[web_memory_optimizer] 租户优化完成 user_id=%s",
+                    user_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "[web_memory_optimizer] 租户优化失败 user_id=%s",
+                    user_id,
+                )
+
+
+class MemoryOptimizerGroup:
+    def __init__(
+        self,
+        optimizers: list[tuple[str, MemoryOptimizerApi]],
+    ) -> None:
+        self._optimizers = list(optimizers)
+
+    async def optimize(self) -> None:
+        for name, optimizer in self._optimizers:
+            try:
+                await optimizer.optimize()
+            except asyncio.CancelledError:
+                raise
+            except MemoryOptimizerBusy:
+                logger.info("[memory_optimizer] %s 正在运行，本轮跳过", name)
+            except Exception:
+                logger.exception("[memory_optimizer] %s 优化失败", name)
+
+
 # ── MemoryOptimizerLoop ───────────────────────────────────────────
 
 _DEFAULT_INTERVAL_SECONDS = 64800  # 默认每 18 小时整点
@@ -328,7 +425,7 @@ _DEFAULT_INTERVAL_SECONDS = 64800  # 默认每 18 小时整点
 class MemoryOptimizerLoop:
     def __init__(
         self,
-        optimizer: MemoryOptimizer | None,
+        optimizer: MemoryOptimizerApi | None,
         interval_seconds: int = _DEFAULT_INTERVAL_SECONDS,
         _now_fn: Callable[[], datetime] | None = None,
     ) -> None:
