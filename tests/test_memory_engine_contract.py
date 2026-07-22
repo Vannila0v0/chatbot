@@ -292,6 +292,32 @@ async def test_default_memory_engine_respects_skip_post_memory_event_flag():
     await event_bus.aclose()
 
 
+async def test_default_memory_engine_skips_unscoped_web_post_response():
+    event_bus = EventBus()
+    worker = SimpleNamespace(run=AsyncMock(), handle=AsyncMock())
+    _ = _make_default_engine(
+        retriever=cast(Any, SimpleNamespace()),
+        post_response_worker=cast(Any, worker),
+        event_publisher=event_bus,
+    )
+
+    event_bus.enqueue(
+        TurnCommitted(
+            session_key="web:550e8400-e29b-41d4-a716-446655440000:primary",
+            channel="web",
+            chat_id="primary",
+            input_message="这条旧偏好是错的",
+            persisted_user_message="这条旧偏好是错的",
+            assistant_response="收到",
+            tools_used=[],
+        )
+    )
+    await event_bus.drain()
+
+    worker.handle.assert_not_awaited()
+    await event_bus.aclose()
+
+
 def test_markdown_maintenance_respects_skip_post_memory_event_flag():
     maintenance = MarkdownMemoryMaintenance.__new__(MarkdownMemoryMaintenance)
     maintenance._enqueue_maintenance = MagicMock()

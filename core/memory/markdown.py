@@ -653,8 +653,9 @@ ongoing_threads 严格限制：
         session,
         archive_all: bool = False,
         force: bool = False,
+        profile_maint: "MarkdownMemoryStore | None" = None,
     ) -> _ConsolidationDraft | None:
-        profile_maint = self._profile_maint
+        profile_maint = profile_maint or self._profile_maint
         # 1. 先决定这次要归档哪一段消息窗口；没有新窗口就直接返回。
         window = _select_consolidation_window(
             session,
@@ -936,8 +937,10 @@ class MarkdownMemoryMaintenance:
         event_bus: "EventBus | None" = None,
         recent_context_provider: "LLMProvider | None" = None,
         recent_context_model: str | None = None,
+        resolver: "MarkdownMemoryStoreResolver | None" = None,
     ) -> None:
         self._store = store
+        self._resolver = resolver
         self._event_bus = event_bus
         self._worker = _MarkdownConsolidationWorker(
             profile_maint=store,
@@ -964,7 +967,31 @@ class MarkdownMemoryMaintenance:
     def on_turn_committed(self, event: TurnCommitted) -> None:
         if bool((event.extra or {}).get("skip_post_memory")):
             return
+        if not self._event_scope_is_valid(event):
+            logger.warning(
+                "Markdown memory maintenance rejected mismatched scope: channel=%s session=%s",
+                event.channel,
+                event.session_key,
+            )
+            return
         self._enqueue_maintenance(event.session_key)
+
+    @staticmethod
+    def _event_scope_is_valid(event: TurnCommitted) -> bool:
+        is_web_session = event.session_key.startswith("web:")
+        if event.channel == "web":
+            if not is_web_session:
+                return False
+            from core.memory.scope import (
+                InvalidMemoryScopeError,
+                parse_web_memory_scope,
+            )
+
+            try:
+                return parse_web_memory_scope(event.session_key) is not None
+            except InvalidMemoryScopeError:
+                return False
+        return not is_web_session
 
     def _enqueue_maintenance(self, session_key: str) -> None:
         if self._get_session is None or self._save_session is None:
@@ -1051,14 +1078,16 @@ class MarkdownMemoryMaintenance:
             return await self._consolidate_unlocked(request)
 
     async def _consolidate_unlocked(self, request: ConsolidateRequest) -> ConsolidateResult:
+        store = self._store_for_session(request.session)
         draft = await self._worker.prepare_consolidation(
             request.session,
             archive_all=request.archive_all,
             force=request.force,
+            profile_maint=store,
         )
         if draft is None:
             return ConsolidateResult(trace={"mode": "skipped"})
-        await self._commit_markdown_draft(request.session, draft)
+        await self._commit_markdown_draft(request.session, draft, store=store)
         return ConsolidateResult(
             consolidated_count=len(draft.window.old_messages),
             trace={"mode": "markdown", "source_ref": draft.source_ref},
@@ -1068,18 +1097,20 @@ class MarkdownMemoryMaintenance:
         self,
         session: object,
         draft: "_ConsolidationDraft",
+        *,
+        store: MarkdownMemoryStore,
     ) -> None:
         history_entries = [entry for entry, _ in draft.history_entry_payloads]
         if history_entries:
             await asyncio.to_thread(
-                self._store.append_history_once,
+                store.append_history_once,
                 "\n".join(history_entries),
                 source_ref=draft.source_ref,
                 kind="history_entry",
             )
         if draft.pending_items:
             appended = await asyncio.to_thread(
-                self._store.append_pending_once,
+                store.append_pending_once,
                 draft.pending_items,
                 source_ref=draft.source_ref,
                 kind="pending_items",
@@ -1089,11 +1120,11 @@ class MarkdownMemoryMaintenance:
                     "Markdown memory: appended %d pending_items",
                     len(draft.pending_items.splitlines()),
                 )
-        self._store.write_recent_context(draft.recent_context_text)
+        store.write_recent_context(draft.recent_context_text)
         if history_entries:
             await asyncio.to_thread(
                 _append_entries_to_journal,
-                self._store,
+                store,
                 history_entries,
                 draft.source_ref,
             )
@@ -1101,7 +1132,8 @@ class MarkdownMemoryMaintenance:
             session.last_consolidated = 0
         else:
             session.last_consolidated = draft.window.consolidate_up_to
-        if self._event_bus is not None:
+        session_key = str(getattr(session, "key", "") or "")
+        if self._event_bus is not None and not session_key.startswith("web:"):
             await self._event_bus.emit(
                 ConsolidationCommitted(
                     history_entry_payloads=list(draft.history_entry_payloads),
@@ -1111,12 +1143,29 @@ class MarkdownMemoryMaintenance:
                     conversation=draft.conversation,
                 )
             )
+        elif self._event_bus is not None:
+            logger.info(
+                "Web vector bridge skipped until tenant vector scope is available: %s",
+                session_key,
+            )
 
     async def refresh_recent_turns(
         self,
         request: RefreshRecentTurnsRequest,
     ) -> None:
-        await self._worker.refresh_recent_turns(session=request.session)
+        store = self._store_for_session(request.session)
+        await self._worker.refresh_recent_turns(
+            session=request.session,
+            profile_maint=store,
+        )
+
+    def _store_for_session(self, session: object) -> MarkdownMemoryStore:
+        if self._resolver is None:
+            return self._store
+        session_key = str(getattr(session, "key", "") or "")
+        if not session_key:
+            return self._store
+        return self._resolver.store_for(session_key)
 
 
 def build_markdown_memory_runtime(
@@ -1141,6 +1190,7 @@ def build_markdown_memory_runtime(
         event_bus=event_bus,
         recent_context_provider=recent_context_provider,
         recent_context_model=recent_context_model,
+        resolver=resolver,
     )
     return MarkdownMemoryRuntime(
         store=store,
